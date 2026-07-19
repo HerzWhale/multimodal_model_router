@@ -1,0 +1,16 @@
+routing_rules:
+  ocr:
+    provider: doubao
+    model_name: mock-ocr
+  speech_to_text:
+    provider: doubao
+    model_name: mock-asr
+  visual_understanding:
+    provider: qwen
+    model_name: mock-vision
+  text_analysis:
+    provider: deepseek
+    model_name: mock-text
+  summary_merge:
+    provider: deepseek
+    model_name: mock-text

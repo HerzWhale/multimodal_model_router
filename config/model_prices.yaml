@@ -1,0 +1,24 @@
+models:
+  mock-ocr:
+    provider: doubao
+    pricing_unit: image_count
+    price_cny_per_unit: 0.01
+  mock-asr:
+    provider: doubao
+    pricing_unit: audio_seconds
+    price_cny_per_unit: 0.0005
+  mock-vision:
+    provider: qwen
+    pricing_unit: frame_count
+    price_cny_per_unit: 0.01
+  mock-text:
+    provider: deepseek
+    pricing_unit: input_tokens
+    price_cny_per_unit: 0.000002
+  deepseek-v4-flash:
+    provider: deepseek
+    pricing_rules:
+      - unit_type: input_tokens
+        price_cny_per_unit: 0.000001008
+      - unit_type: output_tokens
+        price_cny_per_unit: 0.000002016

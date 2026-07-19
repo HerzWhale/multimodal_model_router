@@ -1,0 +1,45 @@
+# Python 缓存
+__pycache__/
+**/__pycache__/
+**pycache**/
+*.pyc
+*.pyo
+*.pyd
+*$py.class
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# IDE 与编辑器配置
+.idea/
+.vscode/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 环境变量与本地密钥
+.env
+.env.*
+
+# 日志与临时文件
+*.log
+*.tmp
+*.bak
+
+# 本地协作规划记录：用于开发过程，不作为公开作品集内容
+task_plan.md
+findings.md
+progress.md
+
+# 测试和覆盖率缓存
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 输出批次：默认忽略未来临时批次，但保留当前作品集展示证据
+output/*
+!output/batch_20260718_150348/
+!output/batch_20260718_150348/**

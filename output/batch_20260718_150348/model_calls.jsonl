@@ -1,0 +1,200 @@
+{
+  "call_id": "file_0001_call_0001",
+  "batch_id": "batch_20260718_150348",
+  "file_id": "file_0001",
+  "task_type": "ocr",
+  "provider": "doubao",
+  "model_name": "mock-ocr",
+  "input_units": [
+    {
+      "unit_type": "image_count",
+      "quantity": 1
+    }
+  ],
+  "output_units": [
+    {
+      "unit_type": "text_chars",
+      "quantity": 17
+    }
+  ],
+  "cost_cny": 0.01,
+  "latency_ms": 0,
+  "started_at": "2026-07-18T15:03:48+08:00",
+  "status": "success",
+  "error_message": null
+}
+{
+  "call_id": "file_0001_call_0002",
+  "batch_id": "batch_20260718_150348",
+  "file_id": "file_0001",
+  "task_type": "visual_understanding",
+  "provider": "qwen",
+  "model_name": "mock-vision",
+  "input_units": [
+    {
+      "unit_type": "frame_count",
+      "quantity": 1
+    }
+  ],
+  "output_units": [
+    {
+      "unit_type": "output_tokens",
+      "quantity": 13
+    }
+  ],
+  "cost_cny": 0.01,
+  "latency_ms": 0,
+  "started_at": "2026-07-18T15:03:48+08:00",
+  "status": "success",
+  "error_message": null
+}
+{
+  "call_id": "file_0001_call_0003",
+  "batch_id": "batch_20260718_150348",
+  "file_id": "file_0001",
+  "task_type": "text_analysis",
+  "provider": "deepseek",
+  "model_name": "deepseek-v4-flash",
+  "input_units": [
+    {
+      "unit_type": "input_tokens",
+      "quantity": 236
+    }
+  ],
+  "output_units": [
+    {
+      "unit_type": "output_tokens",
+      "quantity": 159
+    }
+  ],
+  "cost_cny": 0.000558,
+  "latency_ms": 1736,
+  "started_at": "2026-07-18T15:03:50+08:00",
+  "status": "success",
+  "error_message": null
+}
+{
+  "call_id": "file_0002_call_0001",
+  "batch_id": "batch_20260718_150348",
+  "file_id": "file_0002",
+  "task_type": "text_analysis",
+  "provider": "deepseek",
+  "model_name": "deepseek-v4-flash",
+  "input_units": [
+    {
+      "unit_type": "input_tokens",
+      "quantity": 426
+    }
+  ],
+  "output_units": [
+    {
+      "unit_type": "output_tokens",
+      "quantity": 332
+    }
+  ],
+  "cost_cny": 0.001099,
+  "latency_ms": 3425,
+  "started_at": "2026-07-18T15:03:54+08:00",
+  "status": "success",
+  "error_message": null
+}
+{
+  "call_id": "file_0003_call_0001",
+  "batch_id": "batch_20260718_150348",
+  "file_id": "file_0003",
+  "task_type": "ocr",
+  "provider": "doubao",
+  "model_name": "mock-ocr",
+  "input_units": [
+    {
+      "unit_type": "image_count",
+      "quantity": 1
+    }
+  ],
+  "output_units": [
+    {
+      "unit_type": "text_chars",
+      "quantity": 27
+    }
+  ],
+  "cost_cny": 0.01,
+  "latency_ms": 0,
+  "started_at": "2026-07-18T15:03:54+08:00",
+  "status": "success",
+  "error_message": null
+}
+{
+  "call_id": "file_0003_call_0002",
+  "batch_id": "batch_20260718_150348",
+  "file_id": "file_0003",
+  "task_type": "visual_understanding",
+  "provider": "qwen",
+  "model_name": "mock-vision",
+  "input_units": [
+    {
+      "unit_type": "frame_count",
+      "quantity": 1
+    }
+  ],
+  "output_units": [
+    {
+      "unit_type": "output_tokens",
+      "quantity": 18
+    }
+  ],
+  "cost_cny": 0.01,
+  "latency_ms": 0,
+  "started_at": "2026-07-18T15:03:54+08:00",
+  "status": "success",
+  "error_message": null
+}
+{
+  "call_id": "file_0003_call_0003",
+  "batch_id": "batch_20260718_150348",
+  "file_id": "file_0003",
+  "task_type": "speech_to_text",
+  "provider": "doubao",
+  "model_name": "mock-asr",
+  "input_units": [
+    {
+      "unit_type": "audio_seconds",
+      "quantity": 0.0
+    }
+  ],
+  "output_units": [
+    {
+      "unit_type": "text_chars",
+      "quantity": 13
+    }
+  ],
+  "cost_cny": 0.0,
+  "latency_ms": 0,
+  "started_at": "2026-07-18T15:03:54+08:00",
+  "status": "success",
+  "error_message": null
+}
+{
+  "call_id": "file_0003_call_0004",
+  "batch_id": "batch_20260718_150348",
+  "file_id": "file_0003",
+  "task_type": "text_analysis",
+  "provider": "deepseek",
+  "model_name": "deepseek-v4-flash",
+  "input_units": [
+    {
+      "unit_type": "input_tokens",
+      "quantity": 252
+    }
+  ],
+  "output_units": [
+    {
+      "unit_type": "output_tokens",
+      "quantity": 97
+    }
+  ],
+  "cost_cny": 0.00045,
+  "latency_ms": 1300,
+  "started_at": "2026-07-18T15:03:55+08:00",
+  "status": "success",
+  "error_message": null
+}

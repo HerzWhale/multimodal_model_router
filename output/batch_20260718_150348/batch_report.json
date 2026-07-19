@@ -1,0 +1,80 @@
+{
+  "schema_version": "v1",
+  "batch_id": "batch_20260718_150348",
+  "generated_at": "2026-07-18T15:03:55+08:00",
+  "file_stats": {
+    "total_files": 3,
+    "success_files": 3,
+    "partial_success_files": 0,
+    "failed_files": 0,
+    "skipped_files": 0,
+    "success_rate": 1.0,
+    "failure_rate": 0.0,
+    "partial_success_rate": 0.0
+  },
+  "cost_stats": {
+    "budget_limit_cny": 50.0,
+    "total_cost_cny": 0.042107,
+    "avg_cost_per_file_cny": 0.014036,
+    "avg_cost_per_success_file_cny": 0.014036,
+    "cost_by_task_type": {
+      "ocr": 0.02,
+      "speech_to_text": 0.0,
+      "text_analysis": 0.002107,
+      "visual_understanding": 0.02
+    },
+    "cost_by_provider": {
+      "deepseek": 0.002107,
+      "doubao": 0.02,
+      "qwen": 0.02
+    },
+    "budget_used_rate": 0.000842
+  },
+  "latency_stats": {
+    "total_processing_time_ms": 6463.0,
+    "avg_processing_time_per_file_ms": 2154.333333,
+    "avg_model_latency_ms": 807.625,
+    "p95_model_latency_ms": 3425.0,
+    "latency_by_task_type": {
+      "ocr": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      },
+      "speech_to_text": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      },
+      "text_analysis": {
+        "avg_latency_ms": 2153.666667,
+        "p95_latency_ms": 3425.0
+      },
+      "visual_understanding": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      }
+    },
+    "latency_by_provider": {
+      "deepseek": {
+        "avg_latency_ms": 2153.666667,
+        "p95_latency_ms": 3425.0
+      },
+      "doubao": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      },
+      "qwen": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      }
+    },
+    "slowest_file_id": "file_0002"
+  },
+  "error_quality_stats": {
+    "total_errors": 0,
+    "errors_by_level": {},
+    "errors_by_task_type": {},
+    "top_error_messages": [],
+    "quality_flags_count": {},
+    "partial_success_reasons": {}
+  }
+}
