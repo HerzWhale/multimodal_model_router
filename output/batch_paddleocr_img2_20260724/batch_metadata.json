@@ -1,0 +1,11 @@
+{
+  "schema_version": "v1",
+  "batch_id": "batch_paddleocr_img2_20260724",
+  "created_by": "local_user",
+  "team_name": "content_ai_team",
+  "request_purpose": "img_2.png ?? PaddleOCR ????",
+  "created_at": "2026-07-24T10:33:44+08:00",
+  "budget_limit_cny": 50,
+  "allow_partial_success": true,
+  "target_output_format": "jsonl"
+}

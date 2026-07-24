@@ -1,35 +1,64 @@
 # Architecture
 
-这份文档说明当前系统如何拆分模块、如何处理文本/图片/视频、如何记录模型调用，以及当前架构的真实边界。
+这份文档说明当前系统如何拆分模块、如何处理文本 / 图片 / 视频、如何记录模型调用，以及当前架构的真实边界。
+
+项目定位保持为：面向内容平台 AI 团队技术负责人的多模态批处理与模型路由 MVP。文本主分类评估只是当前最扎实的一条验证链路，不代表项目被收缩成“只能做文本分类”。
 
 ## 1. 项目整体架构
 
 ```text
 config/
-  ├─ settings.yaml          运行配置
-  ├─ routing_rules.yaml     任务到供应商/模型的路由配置
-  └─ model_prices.yaml      模型计价配置
+  ├─ settings.yaml                 运行配置
+  ├─ routing_rules.yaml            任务到供应商 / 模型的固定路由配置
+  ├─ model_prices.yaml             模型计价配置
+  └─ routing_policy_config.yaml    离线路由策略约束配置
 
-input/
-  ├─ sample_text/           文本样例
-  ├─ sample_images/         图片样例
-  └─ sample_videos/         视频样例
+evaluation/
+  ├─ text_topic_small_set/         文本主分类小样本评估集
+  └─ text_topic_gold.csv           文本主分类人工标准答案
 
 src/
-  ├─ main.py                批处理入口
-  ├─ file_loader.py         文件扫描与文件记录生成
-  ├─ preprocessor.py        文本、图片、视频预处理
-  ├─ model_router.py        按任务类型选择模型
-  ├─ model_clients.py       mock 模型与 DeepSeek 文本分析调用
-  ├─ pipeline_runner.py     单文件流水线调度
-  ├─ cost_latency_tracker.py 成本和延迟记录生成
-  ├─ result_writer.py       输出文件写入
-  ├─ report_generator.py    批次报告生成
-  └─ model_strategy_advisor.py 模型组合策略报告生成
+  ├─ main.py                       批处理入口
+  ├─ file_loader.py                文件扫描与文件记录生成
+  ├─ preprocessor.py               文本、图片、视频预处理
+  ├─ model_router.py               按任务类型选择模型
+  ├─ model_clients.py              mock 模型、本地 PaddleOCR 与 DeepSeek 文本分析
+  ├─ pipeline_runner.py            单文件流水线调度
+  ├─ cost_latency_tracker.py       成本和延迟记录生成
+  ├─ result_writer.py              输出文件写入
+  ├─ report_generator.py           批次报告生成
+  ├─ model_strategy_advisor.py     模型组合策略报告生成
+  ├─ model_catalog.py              从调用明细聚合模型目录
+  ├─ routing_policy.py             离线路由策略与约束判断
+  ├─ strategy_simulator.py         路由策略离线模拟报告生成
+  └─ text_topic_evaluator.py       文本主分类评估报告生成
 
 output/
-  └─ batch_xxx/             每次批处理的输出目录
+  └─ batch_xxx/                    每次批处理的输出目录
 ```
+
+目录边界：
+
+| 目录 | 含义 | 当前规则 |
+|---|---|---|
+| `input/` | 默认业务输入目录，用来模拟用户交给系统处理的一批文本、图片或视频文件 | 默认运行 `python .\src\main.py` 时读取 |
+| `evaluation/` | 评估样本目录，用来验证模型输出是否命中人工标准答案 | 不会被默认流程自动读取，必须用 `--input-dir` 显式指定 |
+| `output/` | 批处理输出目录，用来保存结果、调用记录、批次报告和评估报告 | 每次运行生成或复用指定的 `batch_id` |
+
+字段说明：
+
+| 字段 | 含义与作用 |
+|---|---|
+| `input_dir` | 本次批处理读取的输入目录，用来区分普通业务输入和受控评估样本 |
+| `batch_id` | 一次批处理任务的唯一标识，用于把本次输入文件、模型调用和输出结果归到同一批次 |
+| `gold_topic` | 人工标注的正确主分类，只存在于评估流程中，用来计算文本主分类准确率 |
+| `ocr_backend` | 图片 OCR 后端配置，用来决定使用 mock 还是本地 PaddleOCR |
+| `text_analysis_backend` | 文本分析后端配置，用来决定使用本地 mock 还是 DeepSeek 真实 API |
+| `--allow-live-api` | DeepSeek API 调用授权开关；没有该开关时，即使配置选择 DeepSeek，也会在网络请求前停止 |
+| `--max-api-retries` | 可重试错误的最大重试次数；默认0，只允许显式设为1，避免意外增加费用 |
+| `--include-files` | 指定本次只处理哪些文件名，用于受控评估少量图片，避免误跑整个输入目录 |
+
+PaddleOCR 在本地运行，不使用外部 API 授权开关。选择 PaddleOCR 时，未显式选择的文本分析后端强制使用 mock；选择 DeepSeek 时，未显式选择的 OCR 后端同样强制使用 mock，避免一次命令意外执行两条非默认路径。
 
 整体数据流：
 
@@ -38,7 +67,7 @@ output/
   ↓
 file_loader 生成文件清单
   ↓
-pipeline_runner 根据 media_type 选择流水线
+pipeline_runner 根据媒体类型选择流水线
   ↓
 preprocessor 准备文本、图片路径、视频关键帧和音频占位
   ↓
@@ -50,72 +79,57 @@ result_writer 写入结果、调用明细和错误索引
   ↓
 report_generator 汇总批次统计报告
   ↓
-model_strategy_advisor 基于已有批次生成模型组合建议
+model_strategy_advisor / strategy_simulator 做离线策略分析
+  ↓
+text_topic_evaluator 基于人工标准答案做文本主分类评估
 ```
 
 ## 2. 核心模块说明
 
 | 模块 | 作用 | 当前边界 |
 |---|---|---|
-| `main.py` | 批处理入口，读取配置、运行文件清单、写入输出文件 | 命令行入口，没有 Web 页面 |
+| `main.py` | 读取配置、检查 PaddleOCR 本地依赖、执行 DeepSeek API 安全校验并运行批处理 | 默认使用 mock；PaddleOCR 必须显式选择，DeepSeek 还必须显式授权 |
 | `file_loader.py` | 扫描输入目录，生成文件级元数据 | 支持本地文件，不支持云存储 |
 | `preprocessor.py` | 根据文件类型做基础预处理 | 视频关键帧和音频处理仍是占位 |
-| `model_router.py` | 根据任务类型选择供应商和模型 | 当前是固定路由，不是动态推荐 |
-| `model_clients.py` | 封装 mock 模型和 DeepSeek 文本分析 | 真实接入只覆盖 DeepSeek 文本分析 |
-| `pipeline_runner.py` | 调度单个文件的处理流程，生成文件级结果 | 当前主要验证流水线和追踪能力 |
+| `model_router.py` | 根据任务类型选择供应商和模型 | 当前是固定路由，不是运行时动态推荐 |
+| `model_clients.py` | 封装 mock、本地 PaddleOCR 和 DeepSeek 文本分析 | 已完成两张真实截图推理；复杂页面质量与延迟尚未通过正式评估 |
+| `pipeline_runner.py` | 调度文件流程，记录真实或 mock 调用、证据、成本、延迟和错误 | PaddleOCR 当前只用于图片；视频 OCR 明确保留为 mock |
 | `cost_latency_tracker.py` | 生成模型调用成本和延迟记录 | 成本依赖本地价格配置 |
-| `result_writer.py` | 写入 JSON、JSONL 和 Markdown 输出 | 当前采用本地文件输出 |
+| `result_writer.py` | 写入 JSON、标准 JSONL 和 Markdown 输出 | 新 JSONL 每行一条完整记录；历史批次不重写 |
 | `report_generator.py` | 汇总文件、成本、延迟、错误和质量统计 | 当前报告以批次为粒度 |
-| `model_strategy_advisor.py` | 基于既有批次报告和模型调用明细生成模型组合策略报告 | 只做离线分析，不触发外部 API，不自动调度真实多供应商模型 |
+| `model_strategy_advisor.py` | 基于既有批次生成模型组合策略报告 | 离线分析，不触发外部 API |
+| `model_catalog.py` | 从调用明细聚合模型目录 | 只基于已有调用记录，不编造未知模型数据 |
+| `routing_policy.py` | 定义成本、延迟、质量和平衡策略 | 离线策略判断，不改变运行时模型调用 |
+| `strategy_simulator.py` | 基于既有批次生成路由策略模拟报告 | 不触发外部 API，不重新跑批处理 |
+| `text_topic_evaluator.py` | 生成文本评估模板并计算 Accuracy、Macro-F1 和分类级指标 | 只评估文本主分类，不评估图片、视频、摘要或标签质量 |
+| `image_ocr_evaluator.py` | 按人工业务文字块计算OCR精确召回率和字符错误率 | 只读取已有图片结果，不运行OCR或外部API；当前正式基准有2张图 |
 
-## 3. 文本、图片、视频三条处理流程
+## 3. 三条处理流程
 
 ### 文本流程
 
 ```text
 文本文件
   ↓
-文本读取
-  ↓
-raw_text
+读取 raw_text
   ↓
 DeepSeek 文本分析
   ↓
 topic / secondary_topics / tags / summary / business_use
 ```
 
-字段说明：
-
-| 字段 | 含义与作用 |
-|---|---|
-| `raw_text` | 文本文件原文，是文本分析模型的主要证据来源 |
-| `topic` | 主分类，表示内容最主要的业务归属 |
-| `secondary_topics` | 副分类，表示最多两个交叉领域 |
-| `tags` | 关键词，用于搜索、筛选和素材管理 |
-| `summary` | 内容摘要，用于快速理解文件内容 |
-| `business_use` | 业务用途说明，用来解释结构化结果能支持什么动作 |
-
 ### 图片流程
 
 ```text
 图片文件
   ↓
-OCR mock ─────────┐
+OCR mock / 本地 PaddleOCR ─┐
 视觉理解 mock ────┤
                   ↓
           DeepSeek 文本分析
                   ↓
 topic / secondary_topics / tags / summary / business_use
 ```
-
-字段说明：
-
-| 字段 | 含义与作用 |
-|---|---|
-| `ocr_text` | OCR 识别出的文字证据；当前为 mock |
-| `visual_description` | 视觉理解模型生成的画面描述；当前为 mock |
-| `evidence_used` | 最终分析实际使用的证据列表，用来判断结果依据是否完整 |
-| `missing_evidence` | 缺失证据列表，用来解释结果风险 |
 
 ### 视频流程
 
@@ -139,76 +153,69 @@ topic / secondary_topics / tags / summary / business_use
 
 | 字段 | 含义与作用 |
 |---|---|
-| `duration_ms` | 视频或音频时长，单位毫秒，用于估算音频相关任务成本和耗时 |
-| `audio_transcript` | 语音识别得到的音频转写；当前为 mock |
-| `visual_description` | 关键帧视觉描述；当前为 mock |
-| `ocr_text` | 关键帧 OCR 文字；当前为 mock |
+| `raw_text` | 文本原文，是文本分析模型的主要证据来源 |
+| `ocr_text` | OCR 提取的文字证据；图片可选择本地 PaddleOCR，视频仍为 mock；无文字时允许为空 |
+| `audio_transcript` | 音频转写文字；当前视频上游为 mock |
+| `visual_description` | 图片或关键帧的视觉描述；当前图片 / 视频上游为 mock |
+| `topic` | 主分类，表示内容最主要的业务归属 |
+| `secondary_topics` | 副分类，表示最多两个交叉领域 |
+| `tags` | 关键词，用于搜索、筛选和素材管理 |
+| `summary` | 内容摘要，用于快速理解文件内容 |
+| `business_use` | 业务用途说明，用来解释结构化结果能支持什么动作 |
 
 ## 4. 模型路由逻辑
 
-当前模型路由是 MVP 版本：按 `task_type` 固定选择供应商和模型。
+当前运行时路由是 MVP 版本：按 `task_type` 固定选择供应商和模型。
 
-| `task_type` 的含义 | 当前供应商/模型 | 真实状态 |
+| 任务类型 | 当前供应商 / 模型 | 真实状态 |
 |---|---|---|
-| OCR 任务，用于从图片或关键帧提取文字 | `doubao / mock-ocr` | mock |
-| 视觉理解任务，用于生成图片或关键帧描述 | `qwen / mock-vision` | mock |
-| 语音识别任务，用于把音频转成文本 | `doubao / mock-asr` | mock |
-| 文本分析任务，用于生成分类、标签、摘要和业务用途 | `deepseek / deepseek-v4-flash` | 真实调用 |
+| 图片 OCR 默认任务 | `doubao / mock-ocr` | mock |
+| 图片 OCR 可选任务 | `paddlepaddle / PP-OCRv5_mobile` | 已完成两张真实截图的本地 CPU 推理 |
+| 视频 OCR 任务 | `doubao / mock-ocr` | mock |
+| 视觉理解任务 | `qwen / mock-vision` | mock |
+| 语音识别任务 | `doubao / mock-asr` | mock |
+| 文本分析任务 | `deepseek / deepseek-v4-flash` | 真实调用 |
 
-需要注意：
-
-- `routing_rules.yaml` 中仍保留文本分析的 mock 路由配置，这是为了让本地 mock 流程可运行。
-- 实际是否调用 DeepSeek，由 `config/settings.yaml` 中的 `text_analysis_backend` 控制。
-- 当前 Demo 中，`text_analysis_backend` 为 `deepseek`，因此文本分析阶段会调用 DeepSeek。
-- 当前尚未实现按预算、质量、延迟动态选择模型的路由策略。
-
-阶段 4 新增的策略报告不是替代 `model_router.py` 的实时路由器，而是一个离线决策层：
+离线决策层不替代运行时路由器：
 
 | 模块 | 输入 | 输出 | 作用 |
 |---|---|---|---|
-| `model_router.py` | 单个 `task_type`，也就是当前要做的任务类型 | 当前任务使用的供应商和模型 | 在批处理运行时决定这一步调用哪个模型 |
-| `model_strategy_advisor.py` | 已有 `batch_report.json` 和 `model_calls.jsonl` | `model_strategy_report.md` 和 `model_strategy_report.json` | 在批处理完成后分析成本、延迟、真实/mock 边界，并给出下一步模型组合建议 |
+| `model_router.py` | 当前 `task_type` | 当前任务使用的供应商和模型 | 批处理运行时选择模型 |
+| `model_strategy_advisor.py` | 已有 `batch_report.json` 和 `model_calls.jsonl` | 策略报告 | 事后解释成本、延迟、真实 / mock 边界 |
+| `strategy_simulator.py` | 已有批次和策略配置 | 路由策略模拟报告 | 离线比较不同业务目标的取舍 |
 
-相关字段说明：
+字段说明：
 
 | 字段 | 含义与作用 |
 |---|---|
-| `model_call_count` | 模型调用次数，用来衡量本批次任务链路规模 |
-| `is_mock` | 是否为 mock 调用，用来区分真实模型证据和占位流程证据 |
-| `cost_share` | 成本占比，用来判断某个任务、供应商或模型是否构成主要成本来源 |
+| `task_type` | 模型调用任务类型，用于区分 OCR、视觉理解、语音识别和文本分析 |
+| `provider` | 模型供应商，用于按厂商统计成本和延迟 |
+| `model_name` | 具体模型名称，用于追踪结果来源 |
+| `is_mock` | 是否为 mock 调用，用于区分真实证据和占位流程 |
+| `policy_name` | 离线路由策略名称，用于区分成本优先、延迟优先、质量优先和平衡策略 |
+| `constraint_status` | 约束满足状态，用于判断当前批次是否符合策略目标 |
 
 ## 5. 成本与延迟追踪逻辑
 
-系统将成本和延迟拆成两个层级：
+系统把成本和延迟拆成三个层级：
 
 | 层级 | 记录位置 | 用途 |
 |---|---|---|
-| 单次模型调用 | `model_calls.jsonl` | 追踪每次调用用了哪个模型、多少输入输出、多少钱、耗时多久 |
+| 单次模型调用 | `model_calls.jsonl` | 追踪供应商、模型、用量、成本、延迟和状态 |
 | 单个文件结果 | `results.jsonl` / `results_readable.md` | 汇总该文件所有调用成本和处理耗时 |
-| 整个批次 | `batch_report.json` | 汇总批次总成本、平均成本、P95 延迟、成功率和错误质量统计 |
+| 整个批次 | `batch_report.json` | 汇总总成本、平均成本、P95 延迟、成功率和质量风险 |
 
-关键字段说明：
+字段说明：
 
 | 字段 | 含义与作用 |
 |---|---|
 | `call_id` | 单次模型调用唯一标识，用于排查和追踪调用链路 |
-| `input_units` | 输入用量及单位，用于成本估算，例如输入 token、图片数量、帧数或音频秒数 |
-| `output_units` | 输出用量及单位，用于成本估算，例如输出 token 或文本字符数 |
+| `input_units` | 输入用量及单位，用于成本估算 |
+| `output_units` | 输出用量及单位，用于成本估算 |
 | `cost_cny` | 单次模型调用成本，单位人民币 |
 | `latency_ms` | 单次模型调用耗时，单位毫秒 |
-| `processing_cost_cny` | 文件级总成本，由该文件关联的多次调用成本累加得到 |
+| `processing_cost_cny` | 文件级总成本，由该文件关联的调用成本累加得到 |
 | `processing_time_ms` | 文件级总处理耗时，用于判断用户等待时间 |
-| `budget_used_rate` | 批次预算使用率，用于判断本次处理是否接近预算上限 |
-
-当前 Demo 的重要统计：
-
-- 总成本：0.042107 元。
-- 平均每文件成本：0.014036 元。
-- DeepSeek 文本分析成本：0.002107 元。
-- 平均文件处理耗时：2154.33 ms。
-- 模型调用 P95 延迟：3425 ms。
-
-这些数字能展示成本和延迟追踪能力，但不能用于声称多个真实供应商之间的性能对比，因为首期没有真实接入多个供应商。
 
 ## 6. 输出文件生成逻辑
 
@@ -218,22 +225,25 @@ topic / secondary_topics / tags / summary / business_use
 output/{batch_id}/
 ```
 
-其中 `batch_id` 是批次唯一标识，用来把同一次处理中的多个文件和模型调用归在一起。
-
 输出文件说明：
 
 | 文件 | 作用 |
 |---|---|
-| `batch_metadata.json` | 保存批次元数据，例如批次编号、创建时间、创建人、预算和输出格式 |
-| `results.jsonl` | 保存文件级最终结构化结果，适合机器读取和下游导入 |
-| `results_readable.md` | 保存人工可读的结果说明，适合 Demo 展示 |
-| `model_calls.jsonl` | 保存模型调用明细，是成本、延迟和调用链追踪的来源 |
-| `errors.jsonl` | 保存错误索引，用于集中排查失败或部分成功 |
-| `batch_report.json` | 保存批次级统计报告，用于查看成本、延迟、成功率和质量风险 |
-| `model_strategy_report.md` | 保存人工可读的模型组合策略报告，用于解释成本、延迟、真实/mock 边界和下一步建议 |
-| `model_strategy_report.json` | 保存结构化模型组合策略报告，方便后续接入前端、数据库或自动化分析 |
+| `batch_metadata.json` | 保存批次元数据，例如批次编号、创建时间、预算和输出格式 |
+| `results.jsonl` | 保存文件级最终结构化结果；新批次每行一条完整文件记录 |
+| `results_readable.md` | 保存人工可读的结果说明 |
+| `model_calls.jsonl` | 保存模型调用明细；每行一条完整调用记录，是成本、延迟和调用链追踪的来源 |
+| `errors.jsonl` | 保存错误索引；每行一条完整错误记录，用于集中排查失败或部分成功 |
+| `batch_report.json` | 保存批次级统计报告 |
+| `model_strategy_report.md` / `model_strategy_report.json` | 保存模型组合策略分析 |
+| `routing_policy_simulation.md` / `routing_policy_simulation.json` | 保存离线路由策略模拟结果 |
+| `text_topic_eval_template.csv` | 保存文本主分类人工评估模板 |
+| `text_topic_eval_report.md` / `text_topic_eval_report.json` | 保存文本主分类评估报告 |
+| `failure_demo_interpretation.md` | 保存失败 / 部分成功演示解读 |
 
-文件级结果和模型调用之间的关系：
+写入层把机器输出和人工输出分开：三个 `.jsonl` 文件遵循标准 JSONL，便于流式读取和导入；`results_readable.md` 负责分段、换行和解释。读取层保留对历史缩进式连续 JSON 对象的兼容，但不会批量改写已有输出。
+
+字段关系：
 
 ```text
 batch_id：一次批处理
@@ -252,68 +262,122 @@ batch_id：一次批处理
 | `error_message` | 技术错误信息，用于开发者排查失败原因 |
 | `warning_messages` | 面向使用者的风险提示，用于解释结果可信度受到什么影响 |
 
-## 7. 决策层报告生成逻辑
+## 7. 文本主分类评估逻辑
 
-`model_strategy_advisor.py` 是阶段 4 新增的离线决策层模块。它不重新运行批处理，也不调用 DeepSeek 或其他供应商 API，只读取已有 Demo 批次中的两个文件：
+`text_topic_evaluator.py` 不调用 DeepSeek，也不重新生成模型预测。它读取已有 `results.jsonl` 和人工标准答案，生成评估模板或评估报告。
 
-| 输入文件 | 含义与作用 |
+DeepSeek提示词已经实现九类主分类的完整判断顺序：广告营销、新闻资讯、财经商业、科技数码、体育健康、娱乐休闲、生活日常、知识科普和其他。提示词使用通用业务边界，不包含现有评估错例的具体答案。回归批次 `batch_text_eval_20260722_135443` 中，17条有效预测全部正确，原4条错例均已修复；另有1条响应解析失败，没有主分类结果。
+
+当前响应处理会区分API外层JSON错误、缺少模型内容、空内容、模型内容非JSON和结果字段不合规。完整包裹JSON的Markdown代码块可以安全移除；任意解释文字不会被猜测成正式结果。只有显式启用一次重试时，可重试错误才会再次请求。第一次失败和第二次成功分别生成不同的 `call_id`，并分别记录 `status`、`cost_cny` 与 `latency_ms`，因此重试不会被隐藏成一次调用。定向真实验证批次 `batch_text_retry_20260722_192832` 第一次请求即成功，没有实际触发重试。
+
+业务用途采用两层约束：提示词要求 `business_use` 只能描述证据直接支持的业务动作；客户端再检查品牌推广、广告投放、带货和转化等高风险表述。如果输入没有明确品牌合作、购买、下单或促销信号，系统会把用途降级为内容归档、检索和人工复核，并在 `quality_flags` 中记录 `business_use_grounded_fallback`。该标记说明防护被触发，便于后续审计；文件仍可保持 `processing_status=success`，因为结构化结果已经成功生成。真实定向批次 `batch_business_use_guard_20260722_222907` 中，模型直接返回了保守用途，因此质量风险标签为空，客户端强制降级分支没有被真实请求触发。
+
+相关字段说明：
+
+| 字段 | 含义与作用 |
 |---|---|
-| `batch_report.json` | 批次级统计结果，用来读取文件数、成功率、总成本、平均处理耗时和 P95 延迟 |
-| `model_calls.jsonl` | 单次模型调用明细，用来读取每次调用的供应商、模型、任务类型、成本、延迟和状态 |
+| `business_use` | 证据支持的业务用途说明，用于告诉使用者结构化结果可以直接支持什么动作 |
+| `quality_flags` | 机器可读的质量风险标签，用于记录用途降级等不影响流程成功、但需要追溯的质量事件 |
+| `processing_status` | 文件最终处理状态；用途被安全降级时仍可为成功，因为核心结果已生成 |
 
-生成输出：
+如果需要重新处理评估样本，应显式指定评估输入目录：
 
-| 输出文件 | 含义与作用 |
-|---|---|
-| `model_strategy_report.md` | 给人看的策略报告，适合 README、作品集和面试展示 |
-| `model_strategy_report.json` | 给程序看的结构化策略报告，便于后续接入前端或数据库 |
+```powershell
+python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis-backend mock --batch-id batch_eval_mock
+```
 
-分析逻辑：
+这条命令使用 mock 后端，不触发真实 API。重新生成真实预测必须同时显式使用 `--text-analysis-backend deepseek` 和 `--allow-live-api`，并会产生费用。
 
-1. 从批次报告读取文件数、成功率、总成本、平均延迟和 P95 延迟。
-2. 从模型调用明细按任务类型、供应商和模型汇总成本。
-3. 按 `latency_ms` 识别最慢调用，并判断 P95 延迟是否由少数调用拉高。
-4. 按 `model_name` 是否以 `mock` 开头识别真实模型调用和 mock 调用边界。
-5. 输出预算敏感、延迟敏感、质量优先三类模型组合建议。
+```text
+已有 results.jsonl
+  ↓
+提取文本文件的 topic 预测
+  ↓
+生成 text_topic_eval_template.csv
+  ↓
+人工填写或按 file_name 合并 text_topic_gold.csv
+  ↓
+计算端到端 Accuracy、有效预测 Accuracy、预测覆盖率、Macro-F1 和分类级 Precision / Recall / F1
+  ↓
+输出 text_topic_eval_report.json / text_topic_eval_report.md
+```
+
+评估器会把“分类判断错误”和“没有有效预测”分开记录。没有预测仍会降低端到端 Accuracy，并作为真实分类的漏报进入分类级指标；但不会把“当前数据未提供”误当作第十个业务分类。有效预测 Accuracy 只观察九类范围内的有效输出，预测覆盖率则反映调用和JSON结构解析的稳定性。
+
+图片OCR评估采用另一套分段流程：
+
+```text
+读取 results.jsonl 中指定图片的 ocr_text
+  ↓
+读取 image_ocr_gold.csv 中人工确认的业务文字块
+  ↓
+统一全角/半角并移除空白，按非重叠字符范围匹配必选文字块
+  ↓
+计算文字块精确召回率和分段字符错误率
+  ↓
+输出 image_ocr_eval_report.json
+```
+
+这里不比较整页字符串顺序，因为复杂页面中的多栏文字可能被OCR按不同顺序返回；也不统计点赞数、时长、按钮和被截断的话题标签。同一OCR行可以匹配多个互不重叠的文字块，但同一段字符不能被重复使用。`img_1.png` 的20个必选文字块中19个完整命中，分段字符错误率为1.27%；`img_2.png` 的8个必选文字块全部完整命中，分段字符错误率为0%。两张图仍不足以代表生产分布。
 
 字段说明：
 
 | 字段 | 含义与作用 |
 |---|---|
-| `latency_ms` | 单次模型调用延迟，单位毫秒，用来识别最慢调用和瓶颈 |
-| `model_name` | 具体模型名称，用来识别真实模型和 mock 模型 |
-| `real_model_calls` | 真实模型调用汇总，用来说明当前 Demo 可作为真实证据的范围 |
-| `mock_model_calls` | mock 调用汇总，用来说明当前 Demo 只能证明流程跑通的范围 |
-| `missing_data_notes` | 数据缺失说明，用来保证字段缺失时不硬算、不编造 |
+| `predicted_topic` | 模型预测的文本主分类，用来和人工标准答案比较 |
+| `gold_topic` | 人工标注的正确主分类，是计算准确率的基准 |
+| `reviewer_note` | 人工评审备注，用来解释某条样本为什么属于某个主分类 |
+| `evaluated_count` | 已纳入评估的文本样本数，用来判断 Accuracy 的样本基础 |
+| `correct_count` | 模型预测与人工标准答案一致的样本数，用来计算 Accuracy |
+| `accuracy` | 文本主分类准确率，计算方式为 `correct_count / evaluated_count` |
+| `valid_prediction_accuracy` | 有效九分类预测中的准确率，用来单独观察分类判断能力 |
+| `prediction_coverage` | 有效九分类预测占已评估样本的比例，用来观察调用和结构解析稳定性 |
+| `missing_prediction_count` | 没有产出主分类结果的样本数，用来统计调用或解析失败 |
+| `macro_f1` | 各参与评估分类 F1 的简单平均，使不同样本量的分类具有相同权重 |
+| `precision` | 预测为某分类的样本中真正属于该分类的比例，用于观察误报 |
+| `recall` | 人工标注为某分类的样本中被正确识别的比例，用于观察漏报 |
+| `f1` | 单个分类 Precision 与 Recall 的调和平均，用于综合衡量误报和漏报 |
+| `support` | 人工标准答案中属于某分类的样本数，用于判断分类证据量 |
+| `segment_id` | 图片中文字块的唯一编号，用于逐段定位识别正确或错误的位置 |
+| `gold_text` | 人工确认的正确业务文字，是OCR质量评估基准 |
+| `exact_segment_recall` | 完整识别的必选业务文字块占比；重复文字必须匹配不同OCR行 |
+| `character_error_rate` | 分段编辑距离总和除以人工正确字符总数，不统计被排除的界面噪声 |
+| `matched_ocr_text` | 与人工文字块配对的完整OCR行，用于追溯指标来源 |
 
 ## 8. 当前架构限制
 
-- 真实模型能力只覆盖 DeepSeek 文本分析。
-- OCR、视觉理解和语音识别是 mock，不能代表真实图片或视频理解质量。
+- 真实模型证据覆盖 DeepSeek 文本分析和 PaddleOCR 图片文字提取；PaddleOCR已完成五张正式图片、共151段人工业务文字评估，但样本量仍不足以外推生产质量。
+- 图片 OCR 默认仍为 mock，显式选择后才使用本地 PaddleOCR；视频 OCR、视觉理解和语音识别是 mock，不能代表真实图片或视频理解质量。
+- 图片最终分析仍同时使用真实 `ocr_text` 和 mock `visual_description`，不能把文件级结构化结果解释为完整真实图片理解。
+- Paddle 底层推理器对中文路径仍不稳定；本轮直接使用 H 盘中文路径时模型创建失败，改用临时英文盘符映射和 `PADDLE_PDX_CACHE_HOME` 后成功运行。代码尚未自动处理该环境问题。
+- 当前本地 CPU 实测中，`img_1.png` 的 OCR 调用耗时15733ms；`img_2.png` 独立冷启动批次耗时51096ms；三张关键帧图片的 OCR 平均延迟为18006ms、P95延迟为28261ms。当前 OCR 延迟仍高于既定图片2秒目标，且本地资源成本也未计量。
 - 视频预处理仍是占位，尚未进行真实关键帧抽取和音频转写。
-- 模型路由是固定规则，尚未根据预算、质量要求、延迟目标动态选择模型。
-- 决策层报告基于已有批次数据生成，不能替代真实多供应商 live test。
-- 当前没有数据库层，输出主要写入本地 JSON、JSONL 和 Markdown 文件。
-- 当前没有前端页面，展示主要依赖输出文件和后续截图材料。
-- 当前 Demo 样本较小，还不足以证明大规模稳定性。
+- 运行时模型路由是固定规则，尚未根据预算、质量要求、延迟目标动态选择模型。
+- 决策层报告和路由策略模拟基于已有批次数据生成，不能替代真实多供应商 live test。
+- 历史14条受控结果存在标签泄漏，只能证明工程链路；清理后的18条样本修改前基线为77.78% Accuracy和73.70% Macro-F1。
+- 九类规则回归批次端到端Accuracy为94.44%、有效预测Accuracy为100.00%、预测覆盖率为94.44%、Macro-F1为96.30%；原4条错例均已修复，但历史批次有1条响应解析失败。
+- 结构化响应校验已通过原失败样本的真实定向验证；显式重试分支已通过离线故障测试，但本次真实调用未自然触发重试。
+- 高风险商业用途证据约束已完成原样本的真实定向验证，本次没有再生成无证据商业建议；模型主动返回保守用途，所以强制降级分支仍只有离线测试证据。
+- 当前18条样本每类只有2条，且参与过规则诊断，不能代表线上内容分布或证明泛化能力。
+- 当前没有数据库层和前端页面，输出主要写入本地 JSON、JSONL 和 Markdown 文件。
 
 ## 9. 后续可扩展方向
 
-| 方向 | 价值 |
-|---|---|
-| 接入真实 OCR 或视觉理解模型 | 让图片流程从流程验证变成真实多模态能力展示 |
-| 接入真实语音识别 | 让视频流程具备更可信的音频证据 |
-| 增加失败和部分成功样例 | 展示证据缺失、上游失败和错误追踪能力 |
-| 增加动态模型路由 | 把当前离线策略报告升级为运行时按预算、延迟和质量要求选择模型组合 |
-| 增加轻量前端或展示页 | 降低招聘方理解门槛 |
-| 增加更大样本 Demo | 展示批量处理、成本汇总和延迟统计更有说服力 |
-| 整理 GitHub 发布物 | 增加 `.gitignore`、截图、README 链接和可复现说明 |
+| 优先级 | 方向 | 价值 |
+|---|---|---|
+| 已完成 | 明确图片 OCR 评估口径 | 只统计账号名称、简介、作品标题和作品说明等业务内容文字 |
+| 已完成 | 扩充图片 OCR 评估小集 | 当前有5张正式样本、151段人工业务文字，其中3张来自真实视频关键帧信息图 |
+| 已完成 | 建立图片 OCR 评估器 | 分段计算精确召回率和字符错误率，避免多栏阅读顺序污染指标 |
+| 已完成 | 受控执行 PaddleOCR 真实图片 | 三张图片均成功处理，已验证权重下载、响应、文字提取和调用记录 |
+| 已完成 | 增加指定文件筛选 | 使用 `--include-files` 只处理目标文件，避免误跑整个输入目录 |
+| P0 | 保留重试计量回归 | 后续改动继续保证每次尝试独立记录成本、延迟和状态 |
+| P1 | 把故障注入接入受保护演示命令 | 让失败 / 部分成功样例更容易复现，同时避免默认流程误触发 |
+| P0 | 分析 OCR 弱样本与延迟瓶颈 | `img_9.jpg` 完整段落召回率只有47.62%，P95延迟28261ms，需要先解释瓶颈 |
+| P2 | 后续整理展示材料 | 等核心能力更扎实后再考虑是否补充图示、可视说明和对外说明 |
 
 ## 10. 相关文档
 
 | 文档 | 作用 |
 |---|---|
-| `docs/demo_walkthrough.md` | 解释 Demo 输入、运行方式、输出读法、成本延迟和真实/mock 边界 |
-| `docs/portfolio_showcase.md` | 给招聘方快速浏览的 3 分钟展示版 |
+| `docs/demo_walkthrough.md` | 解释代表性输出的运行方式、读法、成本延迟和真实 / mock 边界 |
 | `docs/tests.md` | 说明已有离线测试、测试命令、覆盖范围、风险缺口和后续测试计划 |
-| `docs/release_checklist.md` | GitHub 发布前检查清单，用于避免误提交缓存、密钥或错误输出 |

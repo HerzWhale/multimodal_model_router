@@ -1,0 +1,119 @@
+{
+  "schema_version": "v1",
+  "metric_name": "image_ocr_business_text",
+  "file_name": "img_2.png",
+  "evaluation_scopes": [
+    "business_content"
+  ],
+  "required_segment_count": 8,
+  "exact_segment_count": 8,
+  "exact_segment_recall": 1.0,
+  "total_gold_characters": 71,
+  "total_edit_distance": 0,
+  "character_error_rate": 0.0,
+  "details": [
+    {
+      "segment_id": "video_author",
+      "segment_type": "account_name",
+      "gold_text": "食影双修",
+      "matched_ocr_text": "@食影双修·2025年8月15日",
+      "comparison_text": "食影双修",
+      "is_exact_match": true,
+      "gold_character_count": 4,
+      "edit_distance": 0,
+      "character_error_rate": 0.0,
+      "reviewer_note": "用户已确认；账号名称"
+    },
+    {
+      "segment_id": "video_caption",
+      "segment_type": "content_caption",
+      "gold_text": "第13集：三小时全网超精细解读《九品芝麻官》典故，原型，细节！",
+      "matched_ocr_text": "第13集:三小时全网超精细解读《九品芝麻官》典故,原型,细节!#",
+      "comparison_text": "第13集:三小时全网超精细解读《九品芝麻官》典故,原型,细节!",
+      "is_exact_match": true,
+      "gold_character_count": 31,
+      "edit_distance": 0,
+      "character_error_rate": 0.0,
+      "reviewer_note": "用户已确认；作品说明主句"
+    },
+    {
+      "segment_id": "video_topic_01",
+      "segment_type": "content_topic_tag",
+      "gold_text": "#影娱热点团",
+      "matched_ocr_text": "#影娱热点团",
+      "comparison_text": "#影娱热点团",
+      "is_exact_match": true,
+      "gold_character_count": 6,
+      "edit_distance": 0,
+      "character_error_rate": 0.0,
+      "reviewer_note": "用户已确认；作品说明末尾话题标签"
+    },
+    {
+      "segment_id": "video_topic_02",
+      "segment_type": "content_topic_tag",
+      "gold_text": "#周星驰",
+      "matched_ocr_text": "#周星驰#一口气看完系列#影视解说",
+      "comparison_text": "#周星驰",
+      "is_exact_match": true,
+      "gold_character_count": 4,
+      "edit_distance": 0,
+      "character_error_rate": 0.0,
+      "reviewer_note": "用户已确认；第二行话题标签"
+    },
+    {
+      "segment_id": "video_topic_03",
+      "segment_type": "content_topic_tag",
+      "gold_text": "#一口气看完系列",
+      "matched_ocr_text": "#周星驰#一口气看完系列#影视解说",
+      "comparison_text": "#一口气看完系列",
+      "is_exact_match": true,
+      "gold_character_count": 8,
+      "edit_distance": 0,
+      "character_error_rate": 0.0,
+      "reviewer_note": "用户已确认；第二行话题标签"
+    },
+    {
+      "segment_id": "video_topic_04",
+      "segment_type": "content_topic_tag",
+      "gold_text": "#影视解说",
+      "matched_ocr_text": "#周星驰#一口气看完系列#影视解说",
+      "comparison_text": "#影视解说",
+      "is_exact_match": true,
+      "gold_character_count": 5,
+      "edit_distance": 0,
+      "character_error_rate": 0.0,
+      "reviewer_note": "用户已确认；第二行话题标签"
+    },
+    {
+      "segment_id": "video_collection",
+      "segment_type": "collection_title",
+      "gold_text": "九品芝麻官",
+      "matched_ocr_text": "九品芝麻官",
+      "comparison_text": "九品芝麻官",
+      "is_exact_match": true,
+      "gold_character_count": 5,
+      "edit_distance": 0,
+      "character_error_rate": 0.0,
+      "reviewer_note": "用户已确认；合集名称，排除“合集”和“已是最新集”等界面状态文字"
+    },
+    {
+      "segment_id": "video_subtitle",
+      "segment_type": "video_subtitle",
+      "gold_text": "面临整体上的转型",
+      "matched_ocr_text": "面临整体上的转型",
+      "comparison_text": "面临整体上的转型",
+      "is_exact_match": true,
+      "gold_character_count": 8,
+      "edit_distance": 0,
+      "character_error_rate": 0.0,
+      "reviewer_note": "用户已确认；当前视频画面字幕"
+    }
+  ],
+  "field_notes": {
+    "exact_segment_recall": "完整识别的必选业务文字块占比；同一OCR行可以匹配多个互不重叠的文字块，重复文字必须对应不同字符范围。",
+    "character_error_rate": "各业务文字块与最佳OCR片段的编辑距离之和除以人工正确字符总数；不统计界面噪声。",
+    "matched_ocr_text": "与人工文字块配对的完整OCR行，用于人工复核匹配来源。",
+    "comparison_text": "计算字符编辑距离时使用的OCR片段，避免把相邻且已排除的话题标签计入错误。",
+    "edit_distance": "把OCR片段修改成人工正确文字所需的最少插入、删除和替换次数。"
+  }
+}

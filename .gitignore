@@ -29,17 +29,56 @@ Thumbs.db
 *.tmp
 *.bak
 
-# 本地协作规划记录：用于开发过程，不作为公开作品集内容
+# 本地协作规划记录：用于开发过程，默认不纳入版本管理
 task_plan.md
 findings.md
 progress.md
 
 # 测试和覆盖率缓存
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
+.coverage.*
 htmlcov/
+.ipynb_checkpoints/
 
-# 输出批次：默认忽略未来临时批次，但保留当前作品集展示证据
+# 构建产物
+build/
+dist/
+*.egg-info/
+
+# 本地数据库
+*.db
+*.sqlite
+*.sqlite3
+
+# 清理备份
+_cleanup_backup/
+
+# 输出批次：默认忽略未来临时批次，但保留当前用于复盘和验证的证据批次
 output/*
 !output/batch_20260718_150348/
 !output/batch_20260718_150348/**
+!output/batch_text_eval_20260721_171912/
+!output/batch_text_eval_20260721_171912/**
+!output/batch_text_eval_20260722_131102/
+!output/batch_text_eval_20260722_131102/**
+!output/batch_text_eval_20260722_135443/
+!output/batch_text_eval_20260722_135443/**
+!output/batch_text_retry_20260722_192832/
+!output/batch_text_retry_20260722_192832/**
+!output/batch_business_use_guard_20260722_222907/
+!output/batch_business_use_guard_20260722_222907/**
+!output/batch_failure_demo_20260721_190052/
+!output/batch_failure_demo_20260721_190052/**
+!output/batch_paddleocr_smoke_20260723/
+!output/batch_paddleocr_smoke_20260723/**
+!output/batch_paddleocr_smoke_20260723_retry/
+!output/batch_paddleocr_smoke_20260723_retry/**
+!output/batch_paddleocr_img2_20260724/
+!output/batch_paddleocr_img2_20260724/**
+!output/batch_paddleocr_keyframes_20260724/
+!output/batch_paddleocr_keyframes_20260724/**
+!output/batch_paddleocr_keyframes_20260724_retry/
+!output/batch_paddleocr_keyframes_20260724_retry/**

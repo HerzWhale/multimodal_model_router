@@ -3,6 +3,10 @@ models:
     provider: doubao
     pricing_unit: image_count
     price_cny_per_unit: 0.01
+  PP-OCRv5_mobile:
+    provider: paddlepaddle
+    pricing_unit: image_count
+    price_cny_per_unit: 0.0
   mock-asr:
     provider: doubao
     pricing_unit: audio_seconds

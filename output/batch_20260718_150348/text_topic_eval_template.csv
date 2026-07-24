@@ -1,0 +1,2 @@
+﻿batch_id,file_id,file_name,predicted_topic,predicted_secondary_topics,summary,raw_text_preview,gold_topic,reviewer_note
+batch_20260718_150348,file_0002,ai_content_sample.txt,technology,knowledge,某内容平台AI团队计划建设多模态批处理系统，自动识别文本、图片、视频，拆分任务，记录模型调用的供应商、用量、成本和耗时，生成统一JSONL结果和统计报告，以提升素材结构化效率，支持模型选型和预算控制。,某内容平台的 AI 团队正在整理一批历史素材，其中包括产品发布会稿件、短视频字幕、图文运营文案和技术教程。团队希望把这些素材统一转换成结构化数据，方便后续做内容检索、素材归档和模型训练样本筛选。 在现有流程中，不同格式的文件需要人工判断类型，再分别交给 OCR、语音识别、视觉理解或文本分析模型处理。由于不同供应商的模型...,technology,分类正确

@@ -2,7 +2,8 @@ project_name: multimodal_model_router
 input_dir: input
 output_dir: output
 use_mock_models: true
-text_analysis_backend: deepseek
+ocr_backend: mock
+text_analysis_backend: mock
 deepseek_api_key_env: DEEPSEEK_API_KEY
 deepseek_base_url: https://api.deepseek.com
 deepseek_model_name: deepseek-v4-flash

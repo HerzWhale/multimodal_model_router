@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import io
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from urllib import error
+from unittest.mock import Mock, patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -12,13 +18,71 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from model_clients import (
+    DeepSeekAttemptsExhausted,
+    PaddleOCRResponseError,
     TOPIC_VALUES,
+    _create_paddleocr_engine,
+    _build_deepseek_messages,
     deepseek_text_analysis_client,
     mock_asr_client,
     mock_ocr_client,
     mock_text_analysis_client,
     mock_vision_client,
+    paddleocr_client,
 )
+
+
+class _FakeResponse:
+    """模拟 urllib 返回的响应对象。"""
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.body
+
+
+class _FakePaddleResult:
+    """模拟 PaddleOCR Result 对象的 json 属性。"""
+
+    def __init__(self, payload: object) -> None:
+        self.json = payload
+
+
+def _analysis_content(
+    *,
+    topic: str = "technology",
+    include_summary: bool = True,
+    business_use: str = "可用于技术内容归档。",
+) -> str:
+    """构造 DeepSeek 模型内容。"""
+
+    data = {
+        "topic": topic,
+        "secondary_topics": ["knowledge"],
+        "tags": ["AI工程"],
+        "summary": "这是一条技术内容摘要。",
+        "business_use": business_use,
+    }
+    if not include_summary:
+        data.pop("summary")
+    return json.dumps(data, ensure_ascii=False)
+
+
+def _api_response(content: str) -> _FakeResponse:
+    """构造包含 token 用量的 DeepSeek API 外层响应。"""
+
+    body = {
+        "choices": [{"message": {"content": content}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+    }
+    return _FakeResponse(json.dumps(body, ensure_ascii=False).encode("utf-8"))
 
 
 class ModelClientsTest(unittest.TestCase):
@@ -27,6 +91,116 @@ class ModelClientsTest(unittest.TestCase):
 
         self.assertIn("ocr_text", result)
         self.assertIn("demo.png", result["ocr_text"])
+
+    def test_paddleocr_client_rejects_missing_image(self) -> None:
+        with self.assertRaisesRegex(FileNotFoundError, "不存在"):
+            paddleocr_client("missing.png")
+
+    @patch("model_clients._decode_image_for_paddleocr", return_value="decoded-image")
+    @patch("model_clients._create_paddleocr_engine")
+    def test_paddleocr_client_merges_recognized_lines(
+        self,
+        mock_create_engine,
+        _mock_decode_image,
+    ) -> None:
+        mock_create_engine.return_value.predict.return_value = [
+            {"res": {"rec_texts": [" 第一行 ", "", "第二行"]}}
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "demo.png"
+            image_path.write_bytes(b"real-image-bytes")
+            result = paddleocr_client(image_path)
+
+        self.assertEqual(result["ocr_text"], "第一行\n第二行")
+        mock_create_engine.return_value.predict.assert_called_once_with("decoded-image")
+
+    @patch("model_clients._decode_image_for_paddleocr", return_value="decoded-image")
+    @patch("model_clients._create_paddleocr_engine")
+    def test_paddleocr_client_reads_result_object_json(
+        self,
+        mock_create_engine,
+        _mock_decode_image,
+    ) -> None:
+        mock_create_engine.return_value.predict.return_value = [
+            _FakePaddleResult({"res": {"rec_texts": ["识别文字"]}})
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "result_object.png"
+            image_path.write_bytes(b"image")
+            result = paddleocr_client(image_path)
+
+        self.assertEqual(result["ocr_text"], "识别文字")
+
+    @patch("model_clients._decode_image_for_paddleocr", return_value="decoded-image")
+    @patch("model_clients._create_paddleocr_engine")
+    def test_paddleocr_client_returns_null_when_no_text(
+        self,
+        mock_create_engine,
+        _mock_decode_image,
+    ) -> None:
+        mock_create_engine.return_value.predict.return_value = [{"res": {"rec_texts": []}}]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "no_text.png"
+            image_path.write_bytes(b"image")
+            result = paddleocr_client(image_path)
+
+        self.assertIsNone(result["ocr_text"])
+
+    @patch("model_clients._decode_image_for_paddleocr", return_value="decoded-image")
+    @patch("model_clients._create_paddleocr_engine")
+    def test_paddleocr_client_wraps_inference_failure(
+        self,
+        mock_create_engine,
+        _mock_decode_image,
+    ) -> None:
+        mock_create_engine.return_value.predict.side_effect = RuntimeError("模型加载失败")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "bad.png"
+            image_path.write_bytes(b"bad-image")
+            with self.assertRaisesRegex(PaddleOCRResponseError, "模型加载失败"):
+                paddleocr_client(image_path)
+
+    @patch("model_clients._decode_image_for_paddleocr", return_value="decoded-image")
+    @patch("model_clients._create_paddleocr_engine")
+    def test_paddleocr_client_rejects_invalid_rec_texts(
+        self,
+        mock_create_engine,
+        _mock_decode_image,
+    ) -> None:
+        mock_create_engine.return_value.predict.return_value = [
+            {"res": {"rec_texts": "不是数组"}}
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "bad_schema.png"
+            image_path.write_bytes(b"image")
+            with self.assertRaisesRegex(PaddleOCRResponseError, "rec_texts"):
+                paddleocr_client(image_path)
+
+    def test_paddleocr_engine_disables_mkldnn_on_windows_cpu_path(self) -> None:
+        fake_constructor = Mock(return_value=object())
+        _create_paddleocr_engine.cache_clear()
+
+        with patch.dict(
+            sys.modules,
+            {"paddleocr": SimpleNamespace(PaddleOCR=fake_constructor)},
+        ):
+            _create_paddleocr_engine()
+
+        fake_constructor.assert_called_once_with(
+            text_detection_model_name="PP-OCRv5_mobile_det",
+            text_recognition_model_name="PP-OCRv5_mobile_rec",
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+            device="cpu",
+            enable_mkldnn=False,
+        )
+        _create_paddleocr_engine.cache_clear()
 
     def test_mock_asr_client(self) -> None:
         result = mock_asr_client("demo.wav")
@@ -64,6 +238,227 @@ class ModelClientsTest(unittest.TestCase):
     def test_deepseek_text_analysis_client_requires_api_key(self) -> None:
         with self.assertRaises(ValueError):
             deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key=None)
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_parses_valid_json_and_tracks_attempt(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _api_response(_analysis_content())
+
+        result = deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key")
+
+        self.assertEqual(result["topic"], "technology")
+        self.assertEqual(result["_api_usage"]["total_tokens"], 150)
+        self.assertEqual([item["status"] for item in result["_api_attempts"]], ["success"])
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_accepts_complete_json_code_fence(self, mock_urlopen) -> None:
+        fenced_content = f"```json\n{_analysis_content()}\n```"
+        mock_urlopen.return_value = _api_response(fenced_content)
+
+        result = deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key")
+
+        self.assertEqual(result["topic"], "technology")
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_classifies_invalid_json_without_raw_content(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _api_response("这不是 JSON 内容")
+
+        with self.assertRaises(DeepSeekAttemptsExhausted) as context:
+            deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key")
+
+        self.assertIn("deepseek_content_invalid_json", str(context.exception))
+        self.assertIn("长度", str(context.exception))
+        self.assertNotIn("这不是 JSON 内容", str(context.exception))
+        self.assertEqual(len(context.exception.attempts), 1)
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_classifies_empty_content(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _api_response("")
+
+        with self.assertRaises(DeepSeekAttemptsExhausted) as context:
+            deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key")
+
+        self.assertIn("deepseek_content_empty", str(context.exception))
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_retries_once_then_succeeds(self, mock_urlopen) -> None:
+        mock_urlopen.side_effect = [
+            _api_response("不是 JSON"),
+            _api_response(_analysis_content()),
+        ]
+
+        result = deepseek_text_analysis_client(
+            {"raw_text": "AI 内容分析"},
+            api_key="test-key",
+            max_retries=1,
+        )
+
+        self.assertEqual([item["status"] for item in result["_api_attempts"]], ["failed", "success"])
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_does_not_retry_authentication_error(self, mock_urlopen) -> None:
+        mock_urlopen.side_effect = error.HTTPError(
+            "https://api.deepseek.com/chat/completions",
+            401,
+            "Unauthorized",
+            None,
+            io.BytesIO(b"secret detail"),
+        )
+
+        with self.assertRaises(DeepSeekAttemptsExhausted) as context:
+            deepseek_text_analysis_client(
+                {"raw_text": "AI 内容分析"},
+                api_key="test-key",
+                max_retries=1,
+            )
+
+        self.assertIn("HTTP 401", str(context.exception))
+        self.assertNotIn("secret detail", str(context.exception))
+        self.assertEqual(mock_urlopen.call_count, 1)
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_rejects_missing_required_field(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _api_response(_analysis_content(include_summary=False))
+
+        with self.assertRaises(DeepSeekAttemptsExhausted) as context:
+            deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key")
+
+        self.assertIn("deepseek_content_invalid_schema", str(context.exception))
+        self.assertIn("summary", str(context.exception))
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_rejects_topic_outside_taxonomy(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _api_response(_analysis_content(topic="invalid_topic"))
+
+        with self.assertRaises(DeepSeekAttemptsExhausted) as context:
+            deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key")
+
+        self.assertIn("deepseek_content_invalid_schema", str(context.exception))
+        self.assertIn("topic 不属于既定九类", str(context.exception))
+
+    def test_deepseek_prompt_prefers_business_context_over_tech_terms(self) -> None:
+        messages = _build_deepseek_messages(
+            {
+                "raw_text": "AI 芯片公司发布财报，营收增长但投资风险上升。",
+            }
+        )
+
+        system_prompt = messages[0]["content"]
+
+        self.assertIn("先判断内容主要业务场景", system_prompt)
+        self.assertIn("即使提到 AI、芯片、软件，也优先选择 finance_business", system_prompt)
+        self.assertIn("功能发布、技术教程、产品能力或工程实现为核心", system_prompt)
+
+    def test_deepseek_prompt_contains_complete_topic_policy(self) -> None:
+        """检查真实模型提示词实现已经确认的九类主分类规则。"""
+
+        messages = _build_deepseek_messages({"raw_text": "用于检查提示词规则。"})
+        system_prompt = messages[0]["content"]
+
+        expected_policy_fragments = [
+            "1. ads_marketing：明确品牌广告",
+            "2. news：以报道具体事件为核心",
+            "3. finance_business：财经分析",
+            "4. technology：以 AI、数码、软件、硬件、汽车科技",
+            "5. sports_health：以体育赛事、运动、健身",
+            "6. entertainment：以影视、综艺、明星、游戏",
+            "7. lifestyle：以个人经历、vlog、自拍、美食、旅行、穿搭",
+            "8. knowledge：面向一般受众解释可迁移的概念",
+            "9. other：以上八类都不符合时使用",
+            "领域优先于讲解形式",
+            "不要为了避免 other 而强行选择相邻类别",
+        ]
+
+        for fragment in expected_policy_fragments:
+            self.assertIn(fragment, system_prompt)
+
+    def test_deepseek_prompt_does_not_copy_evaluation_answers(self) -> None:
+        """检查提示词使用通用边界规则，而不是复制现有错例答案。"""
+
+        messages = _build_deepseek_messages({"raw_text": "用于检查提示词规则。"})
+        system_prompt = messages[0]["content"]
+
+        evaluation_specific_phrases = [
+            "校园失物",
+            "社区共享工具",
+            "电影节红毯",
+            "控糖配料表",
+        ]
+
+        for phrase in evaluation_specific_phrases:
+            self.assertNotIn(phrase, system_prompt)
+
+    def test_deepseek_prompt_requires_business_use_evidence(self) -> None:
+        """检查提示词要求业务用途建立在输入证据之上。"""
+
+        messages = _build_deepseek_messages({"raw_text": "用于检查业务用途规则。"})
+        system_prompt = messages[0]["content"]
+
+        self.assertIn("不得编造用户增长、收入提升、转化效果或算法效果", system_prompt)
+        self.assertIn("只有证据明确出现品牌合作、广告合作、购买入口、下单、促销或带货时", system_prompt)
+        self.assertIn("可用于内容归档、检索和人工复核", system_prompt)
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_replaces_unsupported_commercial_use(self, mock_urlopen) -> None:
+        """没有商业证据时，高风险商业用途必须降级为保守用途。"""
+
+        mock_urlopen.return_value = _api_response(
+            _analysis_content(business_use="可关联运动营养品进行品牌推广。")
+        )
+
+        result = deepseek_text_analysis_client(
+            {"raw_text": "这是一份马拉松补给与配速建议。"},
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["business_use"], "可用于内容归档、检索和人工复核。")
+        self.assertEqual(result["_quality_flags"], ["business_use_grounded_fallback"])
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_keeps_commercial_use_with_explicit_evidence(self, mock_urlopen) -> None:
+        """输入明确包含合作和购买证据时，可以保留相应商业用途。"""
+
+        commercial_use = "可用于品牌推广和购买转化。"
+        mock_urlopen.return_value = _api_response(_analysis_content(business_use=commercial_use))
+
+        result = deepseek_text_analysis_client(
+            {"raw_text": "本期是品牌合作内容，视频下方提供购买链接和优惠券。"},
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["business_use"], commercial_use)
+        self.assertEqual(result["_quality_flags"], [])
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_does_not_treat_negated_terms_as_commercial_evidence(self, mock_urlopen) -> None:
+        """否定表达不能被误判为支持广告或转化建议的正向证据。"""
+
+        mock_urlopen.return_value = _api_response(
+            _analysis_content(business_use="可用于广告投放和商品推广。")
+        )
+
+        result = deepseek_text_analysis_client(
+            {"raw_text": "这不是广告，也没有品牌合作、购买入口或推广。"},
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["business_use"], "可用于内容归档、检索和人工复核。")
+        self.assertEqual(result["_quality_flags"], ["business_use_grounded_fallback"])
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_keeps_noncommercial_business_use(self, mock_urlopen) -> None:
+        """普通归档和检索用途不应被防护逻辑改写。"""
+
+        business_use = "可用于体育健康内容归档和人工复核。"
+        mock_urlopen.return_value = _api_response(_analysis_content(business_use=business_use))
+
+        result = deepseek_text_analysis_client(
+            {"raw_text": "这是一份马拉松补给建议。"},
+            api_key="test-key",
+        )
+
+        self.assertEqual(result["business_use"], business_use)
+        self.assertEqual(result["_quality_flags"], [])
 
 
 if __name__ == "__main__":

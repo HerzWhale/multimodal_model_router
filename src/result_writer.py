@@ -32,11 +32,11 @@ def write_json(file_path: str | Path, data: dict[str, Any]) -> Path:
 
 
 def write_jsonl(file_path: str | Path, records: list[dict[str, Any]]) -> Path:
-    """把多条字典记录写入便于人工阅读的 JSONL 文件。"""
+    """把多条字典记录写入标准 JSONL 文件，每条记录占一行。"""
 
     path = Path(file_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [json.dumps(record, ensure_ascii=False, indent=2) for record in records]
+    lines = [json.dumps(record, ensure_ascii=False) for record in records]
     content = "\n".join(lines)
     if content:
         content += "\n"

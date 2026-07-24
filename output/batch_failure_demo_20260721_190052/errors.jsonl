@@ -1,0 +1,24 @@
+{
+  "batch_id": "batch_failure_demo_20260721_190052",
+  "file_id": "file_0001",
+  "call_id": "file_0001_call_0001",
+  "error_level": "model_call",
+  "task_type": "ocr",
+  "error_message": "演示用 OCR 失败：图片文字识别服务超时。"
+}
+{
+  "batch_id": "batch_failure_demo_20260721_190052",
+  "file_id": "file_0002",
+  "call_id": "file_0002_call_0001",
+  "error_level": "model_call",
+  "task_type": "text_analysis",
+  "error_message": "演示用文本分析失败：模型返回不可解析结果。"
+}
+{
+  "batch_id": "batch_failure_demo_20260721_190052",
+  "file_id": "file_0003",
+  "call_id": "file_0003_call_0003",
+  "error_level": "model_call",
+  "task_type": "speech_to_text",
+  "error_message": "演示用语音识别失败：音频转写服务超时。"
+}

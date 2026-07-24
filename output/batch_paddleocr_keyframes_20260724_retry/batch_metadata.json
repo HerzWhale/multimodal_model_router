@@ -1,0 +1,11 @@
+{
+  "schema_version": "v1",
+  "batch_id": "batch_paddleocr_keyframes_20260724_retry",
+  "created_by": "local_user",
+  "team_name": "content_ai_team",
+  "request_purpose": "本地 mock 批处理验证",
+  "created_at": "2026-07-24T17:02:47+08:00",
+  "budget_limit_cny": 50,
+  "allow_partial_success": true,
+  "target_output_format": "jsonl"
+}

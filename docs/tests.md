@@ -1,6 +1,6 @@
 # Tests
 
-这份文档说明当前项目已经有哪些测试、如何运行、覆盖了哪些模块，以及哪些风险还没有被测试覆盖。它的目标不是把项目包装成“测试完备”，而是让招聘方或后续维护者知道当前验证边界。
+这份文档说明当前项目已经有哪些测试、如何运行、覆盖了哪些模块，以及哪些风险还没有被测试覆盖。它的目标不是把项目包装成“测试完备”，而是让后续维护者知道当前验证边界。
 
 ## 1. 测试目标
 
@@ -13,14 +13,17 @@
 - DeepSeek 客户端在缺少 API Key 时能明确失败，不会静默产出假结果。
 - 成本、延迟、结果写入和批次报告能按预期生成。
 - 决策层能基于已有批次数据生成成本、延迟、真实/mock 边界和模型组合建议。
+- 路由策略模拟能基于已有批次检查预算、延迟、真实覆盖率等约束。
+- 文本主分类评估能生成评估模板、合并人工标准答案，并计算 Accuracy、Macro-F1 和分类级指标。
 - 主入口能在临时目录中跑通一次 mock 批处理。
+- 默认运行保持离线；PaddleOCR 单元测试使用替代引擎，不下载权重，DeepSeek 真实调用必须经过显式授权。
 
 ## 2. 当前已有测试数量
 
-当前测试目录共有 10 个测试文件。最近一次离线运行结果为：
+当前测试目录共有 14 个测试文件。最近一次离线运行结果为：
 
 ```text
-Ran 38 tests in 0.077s
+Ran 133 tests
 
 OK
 ```
@@ -40,13 +43,17 @@ python -m unittest discover -s tests
 | `test_file_loader.py` | `file_loader.py` | 文件类型识别、文件清单生成、文件级编号生成 |
 | `test_preprocessor.py` | `preprocessor.py` | 文本读取、图片路径处理、视频关键帧和音频占位输出 |
 | `test_model_router.py` | `model_router.py` | 路由规则读取、按任务类型选择模型、未知任务报错 |
-| `test_model_clients.py` | `model_clients.py` | mock OCR、mock 语音识别、mock 视觉理解、mock 文本分析，以及 DeepSeek 缺少 API Key 时失败 |
+| `test_model_clients.py` | `model_clients.py` | mock客户端、PaddleOCR结果解析、无文字和推理失败处理、DeepSeek结构化响应和有限重试 |
 | `test_cost_latency_tracker.py` | `cost_latency_tracker.py` | 模型价格读取、按输入输出用量计算成本、模型调用记录生成 |
-| `test_pipeline_runner.py` | `pipeline_runner.py` | 文本、图片、视频三条文件级流水线在 mock 模式下跑通 |
-| `test_result_writer.py` | `result_writer.py` | JSON、JSONL、Markdown、人类可读结果、模型调用明细和错误文件写入 |
-| `test_report_generator.py` | `report_generator.py` | JSONL 读取、批次成本、延迟、成功率、错误质量统计生成 |
+| `test_pipeline_runner.py` | `pipeline_runner.py` | 三条文件级流水线、图片本地 OCR 选择、调用记录、无文字结果、OCR失败部分成功，以及视频仍为mock的边界 |
+| `test_result_writer.py` | `result_writer.py` | JSON、标准单行 JSONL、空记录文件、Markdown、人类可读结果、模型调用明细和错误文件写入 |
+| `test_report_generator.py` | `report_generator.py` | 批次成本、延迟、成功率和错误统计；同时验证标准 JSONL 与历史缩进式连续 JSON 对象可读取 |
 | `test_model_strategy_advisor.py` | `model_strategy_advisor.py` | 成本汇总、延迟瓶颈识别、真实/mock 边界识别、字段缺失稳健处理、JSON 和 Markdown 报告生成 |
-| `test_main.py` | `main.py` | 在临时目录中运行一次批处理并生成完整输出文件 |
+| `test_routing_policy.py` | `model_catalog.py` / `routing_policy.py` | 模型目录聚合、策略约束判断、真实/mock 覆盖率、预算扩展模拟和配置读取 |
+| `test_strategy_simulator.py` | `strategy_simulator.py` | 基于已有批次生成路由策略模拟 JSON/Markdown 报告，验证缺字段时不会硬算 |
+| `test_text_topic_evaluator.py` | `text_topic_evaluator.py` / `evaluation/` | 端到端 Accuracy、有效预测 Accuracy、预测覆盖率、Macro-F1、分类级指标、缺失/非法预测分离、缺标签、报告写入、18条样本一致性、标签泄漏、长样本长度和人工答案CSV的Excel编码兼容性 |
+| `test_image_ocr_evaluator.py` | `image_ocr_evaluator.py` / `evaluation/image_ocr_gold.csv` | 文字规范化、重复文字块不可重复占用、同一OCR行内多个非重叠文字块、最佳连续片段、字符编辑距离、可选文字排除、基准字段校验和JSON报告生成 |
+| `test_main.py` | `main.py` | mock批处理、JSONL逐行解析、评估输入隔离、指定文件筛选、PaddleOCR依赖预检、DeepSeek安全闸门，以及未显式选择的另一后端强制保持mock |
 
 ## 4. 关键字段与测试作用
 
@@ -61,27 +68,62 @@ python -m unittest discover -s tests
 | `cost_cny` | 单次模型调用成本，单位人民币，用于成本核算 | 已测试按配置价格计算成本 |
 | `latency_ms` | 单次模型调用延迟，单位毫秒，用于性能分析 | 已测试调用记录和报告会保留延迟 |
 | `processing_status` | 文件级处理状态，用来判断成功、部分成功、失败或跳过 | 已测试报告可统计成功、部分成功和失败状态 |
+| `business_use` | 业务用途说明，用来解释结果可以支持什么业务动作 | 已测试无商业证据的推广、广告或转化建议会降级，明确商业证据和普通用途不会被误改 |
+| `quality_flags` | 机器可读的质量风险标签，用来批量筛选和追溯质量事件 | 已测试用途降级会记录 `business_use_grounded_fallback`，同时文件仍保持成功状态 |
 | `model_call_count` | 模型调用次数，用来衡量本批次实际触发了多少次模型任务 | 已测试策略报告会基于模型调用明细计算调用次数 |
 | `is_mock` | 是否为 mock 调用，用来区分真实模型调用和占位调用 | 已测试策略报告能识别真实 DeepSeek 调用与 mock 上游调用 |
 | `cost_share` | 成本占比，用来判断某个任务或模型是否是主要成本来源 | 已测试策略报告会计算任务和模型维度的成本占比 |
+| `policy_name` | 路由策略名称，用来区分成本优先、延迟优先、质量优先和平衡策略 | 已测试不同策略会生成不同约束判断和建议 |
+| `constraint_status` | 策略约束满足状态，用来判断当前批次是否符合某类业务目标 | 已测试通过、失败和部分未知状态 |
+| `real_coverage_rate` | 真实模型调用占全部模型调用的比例，用来衡量真实 API 证据覆盖程度 | 已测试真实调用和 mock 调用能被区分并计算比例 |
+| `predicted_topic` | 模型预测的文本主分类，用来和人工答案对比 | 已测试能从结果文件中提取并写入评估模板 |
+| `gold_topic` | 人工标注的正确主分类，是计算准确率的基准 | 已测试能从人工标准答案表读取和合并 |
+| `accuracy` | 文本主分类准确率，计算方式为 `correct_count / evaluated_count` | 已测试正确样本数、缺标签样本和准确率计算 |
+| `valid_prediction_accuracy` | 有效九分类预测中的准确率，用于隔离分类判断能力 | 已测试缺少预测时不会把调用失败混成分类错误类型 |
+| `prediction_coverage` | 有效九分类预测占已评估样本的比例，用于观察调用和解析稳定性 | 已测试缺少预测和非法预测会降低覆盖率 |
+| `macro_f1` | 各参与评估分类 F1 的简单平均，用来避免总体正确率掩盖小类别问题 | 已测试类别不均衡时能与 Accuracy 产生不同结果 |
+| `precision` | 预测为某分类的样本中真正属于该分类的比例，用于观察误报 | 已测试分类级 Precision 计算 |
+| `recall` | 人工标注为某分类的样本中被正确识别的比例，用于观察漏报 | 已测试分类级 Recall 计算 |
+| `f1` | 单个分类 Precision 与 Recall 的调和平均，用于综合评价误报和漏报 | 已测试分类级 F1 与 Macro-F1 聚合 |
+| `support` | 人工标准答案中属于某分类的样本数，用于判断分类证据量 | 已测试分类级样本数统计 |
+| `input_dir` | 本次批处理读取的输入目录，用来区分默认业务输入和评估样本输入 | 已测试命令行显式指定评估目录时只处理评估样本 |
+| `--include-files` | 本次只处理的文件名列表，用于受控评估少量图片，避免误跑整个输入目录 | 已测试只处理指定文件，且指定不存在文件时停止 |
+| `ocr_backend` | 图片 OCR 后端配置，用来选择 mock 或本地 PaddleOCR | 已测试默认值为 mock，选择 PaddleOCR 时会预检本地依赖 |
+| `segment_id` | 图片内文字块的唯一编号，用于逐段关联人工正确文本和OCR结果 | 已测试同图重复编号会被拒绝 |
+| `exact_segment_recall` | 完整识别的必选业务文字块占比 | 已测试重复文字必须匹配不同OCR行 |
+| `character_error_rate` | 分段编辑距离总和除以人工正确字符总数 | 已测试缺字、相邻噪声和可选文字排除 |
+| `text_analysis_backend` | 文本分析后端配置，用来决定使用 mock 还是 DeepSeek | 已测试默认值为 mock，且 DeepSeek 未授权时会被拒绝 |
+| `--allow-live-api` | DeepSeek API 调用授权开关，用来防止误触发外部请求和费用 | 已测试必须与显式 DeepSeek 后端同时使用 |
+| `--max-api-retries` | 可重试错误的最大重试次数；默认0，显式设为1才允许一次重试 | 已测试不能超过1，也不能用于mock后端 |
 
 ## 5. 未覆盖的风险
 
 当前测试仍有以下缺口：
 
-- 没有真实 DeepSeek API live test，因此没有自动验证线上网络请求、鉴权、超时和真实响应变化。
-- 没有真实 OCR、视觉理解和语音识别测试，因为这些上游能力当前仍是 mock 或占位。
+- 已实现真实 API 调用安全闸门、响应错误分类和显式单次重试。原失败样本已完成一次真实定向验证并在首次请求成功；真实重试分支没有被自然触发，仍由离线故障测试覆盖。
+- PaddlePaddle 3.3.0 和 PaddleOCR 已安装在项目虚拟环境，五张正式图片已完成本地 CPU 推理与分段评估；但仍未系统测量CPU、内存和批量吞吐。
+- `img_1.png` 的真实 OCR 调用耗时15733ms；`img_2.png` 独立冷启动批次耗时51096ms；三张关键帧图片的 OCR 平均延迟为18006ms、P95延迟为28261ms。当前仍未满足既定图片2秒目标。
+- Windows中文路径和默认oneDNN分别触发过模型加载与运行时兼容问题；代码已关闭MKLDNN并支持中文输入图片路径，但 Paddle 底层推理器对中文模型缓存路径仍不稳定。本轮通过临时英文盘符映射和 `PADDLE_PDX_CACHE_HOME` 成功运行，代码尚未自动处理该环境问题。
+- 本轮三张关键帧图片整体完整段落召回率为78.05%、字符错误率为11.01%；其中 `img_9.jpg` 完整段落召回率只有47.62%，说明复杂图表、密集文字或小字号仍是质量瓶颈。
+- 没有真实视频 OCR、视觉理解和语音识别测试，这些上游能力仍是 mock 或占位。
 - 没有大批量 500 文件压力测试，因此还不能证明大规模处理性能。
-- 没有真实失败批次样例，因此 `partial_success` 和失败恢复链路还缺少 Demo 证据。
+- 已有离线失败 / 部分成功演示批次；但还没有真实供应商故障样例，因此不能把该批次解释为真实故障率。
 - 决策层测试目前验证的是离线报告逻辑，不能证明真实多供应商模型组合效果。
-- 没有 GitHub Actions 或 CI 配置，因此测试尚未成为提交前自动门禁。
+- 文本主分类评估测试验证的是评估器逻辑，包括标签合并、Accuracy、Macro-F1 和分类级指标计算；它不等于证明模型线上质量。
+- 当前评估集有18条清理后样本，测试会检查文件与人工标签一致、模型可见输入不包含分类答案提示，以及4条新增长难例每条不少于约800个中文字符。
+- 九类规则补齐后已完成一次18条受控 DeepSeek 回归；端到端 Accuracy 为94.44%、有效预测 Accuracy 为100.00%、预测覆盖率为94.44%、Macro-F1 为96.30%。该结果是实验产物，不由离线单元测试伪造或保证。
+- 高风险商业用途证据约束已重新调用真实DeepSeek验证原样本，本次没有再生成无证据商业建议；模型主动返回保守用途，所以程序强制降级分支仍由离线测试覆盖。
+- 当前每类只有2条人工样本，且回归复用了参与规则诊断的已知样本；`other` 类本轮 Recall 为100%，但不能据此推断新样本或线上流量的稳定表现。
+- 回归批次有1条响应无法解析为JSON；离线测试已经保证评估器不会把缺失预测误当成新的业务分类，但尚未解决供应商响应解析的端到端稳定性。
+- 没有自动化 CI 配置，因此测试尚未成为提交前自动门禁。
 - 没有跨平台路径测试，尤其是中文路径和 Windows/Linux 路径差异。
 
 ## 6. live test 与离线 test 的区别
 
 | 类型 | 含义 | 是否默认运行 | 原因 |
 |---|---|---|---|
-| 离线 test | 只使用本地 mock、临时目录和固定输入，不访问外部服务 | 是 | 稳定、低成本、不依赖 API Key |
+| 离线 test | 只使用本地 mock、替代 OCR 引擎、临时目录和固定输入 | 是 | 稳定、低成本、不下载权重、不依赖 API Key |
+| 本地模型验证 | 使用真实 PaddleOCR 权重处理真实图片 | 否 | 首次可能下载权重，并消耗本机 CPU、内存和磁盘 |
 | live test | 调用真实 DeepSeek 或其他供应商 API | 否 | 会消耗费用，可能受网络、额度、供应商响应变化影响 |
 
 ## 7. 为什么默认不运行真实 DeepSeek API 测试
@@ -94,14 +136,18 @@ python -m unittest discover -s tests
 
 更合适的方式是后续增加受保护的 live test：只有在用户明确设置环境变量并手动开启时，才运行真实 API 验证。
 
+PaddleOCR 不使用 API Key。它必须显式选择 `paddleocr` 后端；程序会在生成批次输出前检查 PaddlePaddle 和 PaddleOCR 是否已安装。
+
 ## 8. 后续测试计划
 
 | 优先级 | 测试计划 | 类型 | 目的 |
 |---|---|---|---|
-| P0 | 增加失败和部分成功样例测试 | 离线集成测试 | 验证证据缺失、上游失败和文本分析失败时的状态规则 |
-| P0 | 增加 `.gitignore` 和 Demo 文件保留检查 | 手动检查 / 发布前检查 | 避免上传缓存、密钥或误删展示批次 |
+| P0 | 保留DeepSeek响应与重试回归 | 离线单元测试 | 后续修改客户端时防止错误分类、重试边界和调用计量回退 |
+| P1 | 把故障注入接入受保护演示命令 | 离线集成测试 | 让失败和部分成功样例更容易复现，同时避免默认流程误触发 |
+| P0 | 增加 `.gitignore` 和 Demo 文件保留检查 | 手动检查 / 版本管理检查 | 避免纳入缓存、密钥或误删保留证据批次 |
 | P0 | 增加策略报告回归样例 | 离线测试 | 保证 `model_strategy_report.md` 和 `model_strategy_report.json` 的关键结论不随意漂移 |
 | P1 | 增加 DeepSeek live test 开关 | 受保护 live test | 手动验证真实 API 响应结构、成本和延迟记录 |
 | P1 | 增加更大样本批处理测试 | 离线集成测试 | 验证批量处理、报告生成和性能边界 |
-| P2 | 增加 GitHub Actions | CI 测试 | 让离线测试成为仓库提交前门禁 |
-| P2 | 增加真实 OCR 或视觉理解模型测试 | 受保护 live test | 验证图片和视频上游证据提取能力 |
+| P2 | 增加自动化 CI | CI 测试 | 让离线测试成为版本提交前门禁 |
+| P0 | 分析图片 OCR 弱样本与延迟瓶颈 | 受控本地模型测试 / 离线报告复核 | 基于5张正式样本判断 `img_9.jpg` 低召回和P95延迟来源 |
+| P2 | 增加真实视觉理解模型测试 | 受保护 live test | 等图片 OCR 功能通过闸门后再评估 |

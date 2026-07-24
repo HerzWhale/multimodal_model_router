@@ -1,0 +1,152 @@
+﻿file_name,segment_id,segment_type,gold_text,is_required,evaluation_scope,reviewer_note
+img_1.png,profile_name,account_name,食影双修,TRUE,business_content,账号名称
+img_1.png,profile_intro,profile_bio,食饮双修，抖音视频创作者，其IP属地为河北。专注于影视解说视频的创作。,TRUE,business_content,账号简介；排除粉丝数、获赞数和作品数量
+img_1.png,card_01_cover_title,cover_title,风波不断,TRUE,business_content,第一张作品封面标题
+img_1.png,card_01_caption,content_caption,《功夫女足》竟风波不断,TRUE,business_content,第一张作品说明的主句；排除话题标签
+img_1.png,card_02_cover_title,cover_title,商战,TRUE,business_content,第二张作品封面标题
+img_1.png,card_02_caption_line_01,content_caption,我误入了针对周星驰的商战！你以,TRUE,business_content,第二张作品说明第一行
+img_1.png,card_02_caption_line_02,content_caption,为天才就不用挨揍了？,TRUE,business_content,第二张作品说明第二行；排除被界面截断的后续话题标签
+img_1.png,card_03_cover_line_01,cover_title,周星驰,TRUE,business_content,第三张作品封面标题第一部分
+img_1.png,card_03_cover_line_02,cover_title,回来了,TRUE,business_content,第三张作品封面标题第二部分
+img_1.png,card_03_caption,content_caption,《功夫女足》首评来了！,TRUE,business_content,第三张作品说明的主句；排除话题标签
+img_1.png,card_04_cover_title,cover_title,年会不能停,TRUE,business_content,第四张作品封面主标题
+img_1.png,card_04_cover_episode,cover_title,P4,TRUE,business_content,第四张作品封面集数
+img_1.png,card_04_caption,content_caption,职场人情世故，你能接受吗？,TRUE,business_content,第四张作品说明的主句；排除话题标签
+img_1.png,card_05_cover_title,cover_title,年会不能停,TRUE,business_content,第五张作品封面主标题
+img_1.png,card_05_cover_episode,cover_title,P3,TRUE,business_content,第五张作品封面集数
+img_1.png,card_05_caption,content_caption,年会的职场生态！,TRUE,business_content,第五张作品说明的主句；排除话题标签
+img_1.png,card_06_cover_title,cover_title,年会不能停,TRUE,business_content,第六张作品封面主标题
+img_1.png,card_06_cover_episode,cover_title,P2,TRUE,business_content,第六张作品封面集数
+img_1.png,card_06_caption_line_01,content_caption,胡健林的职场生态！《年会不能停》,TRUE,business_content,第六张作品说明第一行
+img_1.png,card_06_caption_line_02,content_caption,解说,TRUE,business_content,第六张作品说明第二行；排除话题标签
+img_2.png,video_author,account_name,食影双修,TRUE,business_content,用户已确认；账号名称
+img_2.png,video_caption,content_caption,第13集：三小时全网超精细解读《九品芝麻官》典故，原型，细节！,TRUE,business_content,用户已确认；作品说明主句
+img_2.png,video_topic_01,content_topic_tag,#影娱热点团,TRUE,business_content,用户已确认；作品说明末尾话题标签
+img_2.png,video_topic_02,content_topic_tag,#周星驰,TRUE,business_content,用户已确认；第二行话题标签
+img_2.png,video_topic_03,content_topic_tag,#一口气看完系列,TRUE,business_content,用户已确认；第二行话题标签
+img_2.png,video_topic_04,content_topic_tag,#影视解说,TRUE,business_content,用户已确认；第二行话题标签
+img_2.png,video_collection,collection_title,九品芝麻官,TRUE,business_content,用户已确认；合集名称，排除“合集”和“已是最新集”等界面状态文字
+img_2.png,video_subtitle,video_subtitle,面临整体上的转型,TRUE,business_content,用户已确认；当前视频画面字幕
+img_7.jpg,chart_title,chart_title,SPEC 2017 CPU测试,TRUE,business_content,图表标题；保留测试主题
+img_7.jpg,test_environment,chart_environment,编译环境：Ubuntu 20.04.5 LTS aarch64,TRUE,business_content,测试环境说明；去除视觉空格差异
+img_7.jpg,compiler_flags,chart_environment,Flags：-g -O3 -mcpu=native -static -fallow-argument-mismatch,TRUE,business_content,编译参数说明；影响图表可解释性
+img_7.jpg,legend_int,legend_label,INT整数,TRUE,business_content,蓝色条形图图例
+img_7.jpg,legend_fp,legend_label,FP浮点,TRUE,business_content,紫色条形图图例
+img_7.jpg,row_01_core,cpu_core_name,Cortex-X3,TRUE,business_content,第一组CPU核心名称
+img_7.jpg,row_01_chip,chip_model,骁龙8 Gen 2,TRUE,business_content,第一组芯片型号
+img_7.jpg,row_01_device,device_model,小米13,TRUE,business_content,第一组测试设备
+img_7.jpg,row_01_clock,clock_speed,2.34GHz,TRUE,business_content,第一组频率
+img_7.jpg,row_01_int_score,benchmark_score,4.78,TRUE,business_content,第一组INT整数分数
+img_7.jpg,row_01_fp_score,benchmark_score,8.08,TRUE,business_content,第一组FP浮点分数
+img_7.jpg,row_02_core,cpu_core_name,Cortex-X2,TRUE,business_content,第二组CPU核心名称
+img_7.jpg,row_02_chip,chip_model,骁龙8+,TRUE,business_content,第二组芯片型号
+img_7.jpg,row_02_device,device_model,红米K50 至尊版,TRUE,business_content,第二组测试设备
+img_7.jpg,row_02_clock,clock_speed,2.36GHz,TRUE,business_content,第二组频率
+img_7.jpg,row_02_int_score,benchmark_score,4.36,TRUE,business_content,第二组INT整数分数
+img_7.jpg,row_02_fp_score,benchmark_score,7.56,TRUE,business_content,第二组FP浮点分数
+img_7.jpg,row_03_core,cpu_core_name,Cortex-X1,TRUE,business_content,第三组CPU核心名称
+img_7.jpg,row_03_chip,chip_model,骁龙888,TRUE,business_content,第三组芯片型号
+img_7.jpg,row_03_device,device_model,魅族18,TRUE,business_content,第三组测试设备
+img_7.jpg,row_03_clock,clock_speed,2.27GHz,TRUE,business_content,第三组频率
+img_7.jpg,row_03_int_score,benchmark_score,3.92,TRUE,business_content,第三组INT整数分数
+img_7.jpg,row_03_fp_score,benchmark_score,6.53,TRUE,business_content,第三组FP浮点分数
+img_7.jpg,row_04_core,cpu_core_name,泰山超大核,TRUE,business_content,第四组CPU核心名称
+img_7.jpg,row_04_chip,chip_model,麒麟9010,TRUE,business_content,第四组芯片型号
+img_7.jpg,row_04_device,device_model,华为Pura 70 Ultra,TRUE,business_content,第四组测试设备
+img_7.jpg,row_04_clock,clock_speed,2.30GHz,TRUE,business_content,第四组频率
+img_7.jpg,row_04_int_score,benchmark_score,4.54,TRUE,business_content,第四组INT整数分数
+img_7.jpg,row_04_fp_score,benchmark_score,7.77,TRUE,business_content,第四组FP浮点分数
+img_7.jpg,row_05_core,cpu_core_name,泰山大核,TRUE,business_content,第五组CPU核心名称
+img_7.jpg,row_05_chip,chip_model,麒麟9000S,TRUE,business_content,第五组芯片型号
+img_7.jpg,row_05_device,device_model,华为Mate X5,TRUE,business_content,第五组测试设备
+img_7.jpg,row_05_clock,clock_speed,2.35GHz,TRUE,business_content,第五组频率
+img_7.jpg,row_05_int_score,benchmark_score,3.64,TRUE,business_content,第五组INT整数分数
+img_7.jpg,row_05_fp_score,benchmark_score,6.49,TRUE,business_content,第五组FP浮点分数
+img_8.jpg,chip_9000s_label,chip_label,Kirin 9000S,TRUE,business_content,上方芯片名称
+img_8.jpg,chip_9000s_big_01_core,cpu_core_name,泰山大核,TRUE,business_content,9000S第一颗大核名称
+img_8.jpg,chip_9000s_big_01_clock,clock_speed,2.62GHz,TRUE,business_content,9000S第一颗大核频率
+img_8.jpg,chip_9000s_big_01_cache,cache_size,1MB L2,TRUE,business_content,9000S第一颗大核二级缓存
+img_8.jpg,chip_9000s_big_02_core,cpu_core_name,泰山大核,TRUE,business_content,9000S第二颗大核名称
+img_8.jpg,chip_9000s_big_02_clock,clock_speed,2.15GHz,TRUE,business_content,9000S第二颗大核频率
+img_8.jpg,chip_9000s_big_02_cache,cache_size,512KB L2,TRUE,business_content,9000S第二颗大核二级缓存
+img_8.jpg,chip_9000s_big_03_core,cpu_core_name,泰山大核,TRUE,business_content,9000S第三颗大核名称
+img_8.jpg,chip_9000s_big_03_clock,clock_speed,2.15GHz,TRUE,business_content,9000S第三颗大核频率
+img_8.jpg,chip_9000s_big_03_cache,cache_size,512KB L2,TRUE,business_content,9000S第三颗大核二级缓存
+img_8.jpg,chip_9000s_big_04_core,cpu_core_name,泰山大核,TRUE,business_content,9000S第四颗大核名称
+img_8.jpg,chip_9000s_big_04_clock,clock_speed,2.15GHz,TRUE,business_content,9000S第四颗大核频率
+img_8.jpg,chip_9000s_big_04_cache,cache_size,512KB L2,TRUE,business_content,9000S第四颗大核二级缓存
+img_8.jpg,chip_9000s_little_01_core,cpu_core_name,A510,TRUE,business_content,9000S第一颗能效核心名称
+img_8.jpg,chip_9000s_little_01_clock,clock_speed,1.5GHz,TRUE,business_content,9000S第一颗能效核心频率
+img_8.jpg,chip_9000s_little_02_core,cpu_core_name,A510,TRUE,business_content,9000S第二颗能效核心名称
+img_8.jpg,chip_9000s_little_02_clock,clock_speed,1.5GHz,TRUE,business_content,9000S第二颗能效核心频率
+img_8.jpg,chip_9000s_little_03_core,cpu_core_name,A510,TRUE,business_content,9000S第三颗能效核心名称
+img_8.jpg,chip_9000s_little_03_clock,clock_speed,1.5GHz,TRUE,business_content,9000S第三颗能效核心频率
+img_8.jpg,chip_9000s_little_04_core,cpu_core_name,A510,TRUE,business_content,9000S第四颗能效核心名称
+img_8.jpg,chip_9000s_little_04_clock,clock_speed,1.5GHz,TRUE,business_content,9000S第四颗能效核心频率
+img_8.jpg,chip_9000s_little_cache_01,cache_size,256KB L2,TRUE,business_content,9000S第一组能效核心二级缓存
+img_8.jpg,chip_9000s_little_cache_02,cache_size,256KB L2,TRUE,business_content,9000S第二组能效核心二级缓存
+img_8.jpg,chip_9010_label,chip_label,Kirin 9010,TRUE,business_content,下方芯片名称
+img_8.jpg,chip_9010_super_01_core,cpu_core_name,泰山超大核,TRUE,business_content,9010超大核名称
+img_8.jpg,chip_9010_super_01_clock,clock_speed,2.3GHz,TRUE,business_content,9010超大核频率
+img_8.jpg,chip_9010_super_01_cache,cache_size,1MB L2,TRUE,business_content,9010超大核二级缓存
+img_8.jpg,chip_9010_big_01_core,cpu_core_name,泰山大核,TRUE,business_content,9010第一颗大核名称
+img_8.jpg,chip_9010_big_01_clock,clock_speed,2.18GHz,TRUE,business_content,9010第一颗大核频率
+img_8.jpg,chip_9010_big_01_cache,cache_size,512KB L2,TRUE,business_content,9010第一颗大核二级缓存
+img_8.jpg,chip_9010_big_02_core,cpu_core_name,泰山大核,TRUE,business_content,9010第二颗大核名称
+img_8.jpg,chip_9010_big_02_clock,clock_speed,2.18GHz,TRUE,business_content,9010第二颗大核频率
+img_8.jpg,chip_9010_big_02_cache,cache_size,512KB L2,TRUE,business_content,9010第二颗大核二级缓存
+img_8.jpg,chip_9010_big_03_core,cpu_core_name,泰山大核,TRUE,business_content,9010第三颗大核名称
+img_8.jpg,chip_9010_big_03_clock,clock_speed,2.18GHz,TRUE,business_content,9010第三颗大核频率
+img_8.jpg,chip_9010_big_03_cache,cache_size,512KB L2,TRUE,business_content,9010第三颗大核二级缓存
+img_8.jpg,chip_9010_little_01_core,cpu_core_name,A510,TRUE,business_content,9010第一颗能效核心名称
+img_8.jpg,chip_9010_little_01_clock,clock_speed,1.55GHz,TRUE,business_content,9010第一颗能效核心频率
+img_8.jpg,chip_9010_little_02_core,cpu_core_name,A510,TRUE,business_content,9010第二颗能效核心名称
+img_8.jpg,chip_9010_little_02_clock,clock_speed,1.55GHz,TRUE,business_content,9010第二颗能效核心频率
+img_8.jpg,chip_9010_little_03_core,cpu_core_name,A510,TRUE,business_content,9010第三颗能效核心名称
+img_8.jpg,chip_9010_little_03_clock,clock_speed,1.55GHz,TRUE,business_content,9010第三颗能效核心频率
+img_8.jpg,chip_9010_little_04_core,cpu_core_name,A510,TRUE,business_content,9010第四颗能效核心名称
+img_8.jpg,chip_9010_little_04_clock,clock_speed,1.55GHz,TRUE,business_content,9010第四颗能效核心频率
+img_8.jpg,chip_9010_little_cache_01,cache_size,256KB L2,TRUE,business_content,9010第一组能效核心二级缓存
+img_8.jpg,chip_9010_little_cache_02,cache_size,256KB L2,TRUE,business_content,9010第二组能效核心二级缓存
+img_9.jpg,left_chip_title,diagram_title,麒麟9000S,TRUE,business_content,左侧结构图芯片标题
+img_9.jpg,left_core_title,diagram_title,泰山大核,TRUE,business_content,左侧结构图核心类型
+img_9.jpg,right_chip_title,diagram_title,麒麟9010,TRUE,business_content,右侧结构图芯片标题
+img_9.jpg,right_core_title,diagram_title,泰山超大核,TRUE,business_content,右侧结构图核心类型
+img_9.jpg,shared_frontend_label,diagram_group_label,前端,TRUE,business_content,结构图前端分区标签
+img_9.jpg,shared_backend_label,diagram_group_label,后端,TRUE,business_content,结构图后端分区标签
+img_9.jpg,left_integer_label,diagram_group_label,整数,TRUE,business_content,左侧整数执行分区标签
+img_9.jpg,left_float_label,diagram_group_label,浮点,TRUE,business_content,左侧浮点执行分区标签
+img_9.jpg,right_integer_label,diagram_group_label,整数,TRUE,business_content,右侧整数执行分区标签
+img_9.jpg,right_float_label,diagram_group_label,浮点,TRUE,business_content,右侧浮点执行分区标签
+img_9.jpg,left_l1_instruction_cache,pipeline_module,L1 Instruction Cache,TRUE,business_content,左侧前端一级指令缓存
+img_9.jpg,left_fetch_branch,pipeline_module,Fetch & Branch Prediction,TRUE,business_content,左侧取指与分支预测模块
+img_9.jpg,left_integer_prf,pipeline_module,Integer PRF 158 Entry,TRUE,business_content,左侧整数物理寄存器文件容量
+img_9.jpg,left_fp_simd_prf,pipeline_module,FP & SIMD PRF 160 Entry,TRUE,business_content,左侧浮点与SIMD物理寄存器文件容量
+img_9.jpg,left_decode,pipeline_module,6 Wide Decode,TRUE,business_content,左侧解码宽度
+img_9.jpg,left_map_rename,pipeline_module,Map & Rename,TRUE,business_content,左侧映射与重命名模块
+img_9.jpg,left_issue_width,pipeline_module,6 μ-ops,TRUE,business_content,左侧后端发射宽度标注
+img_9.jpg,left_int_scheduler,scheduler_module,INT Scheduler 80 Entry,TRUE,business_content,左侧整数调度器容量
+img_9.jpg,left_ldst_scheduler,scheduler_module,LD & ST Scheduler 40 Entry,TRUE,business_content,左侧读写调度器容量
+img_9.jpg,left_fp_scheduler,scheduler_module,FP Scheduler 56 Entry,TRUE,business_content,左侧浮点调度器容量
+img_9.jpg,left_reorder_buffer,buffer_size,Re-order Buffer 504 Entry,TRUE,business_content,左侧重排序缓冲容量
+img_9.jpg,left_stq,buffer_size,STQ 71 Entry,TRUE,business_content,左侧存储队列容量
+img_9.jpg,left_ldq,buffer_size,LDQ 109 Entry,TRUE,business_content,左侧加载队列容量
+img_9.jpg,left_l1_data_cache,cache_module,L1 Data Cache,TRUE,business_content,左侧一级数据缓存
+img_9.jpg,left_l1d_tlb,tlb_size,L1D TLB 128 pages,TRUE,business_content,左侧一级数据TLB容量
+img_9.jpg,left_l2d_tlb,tlb_size,L2D TLB 1024 pages,TRUE,business_content,左侧二级数据TLB容量
+img_9.jpg,right_l1_instruction_cache,pipeline_module,L1 Instruction Cache,TRUE,business_content,右侧前端一级指令缓存
+img_9.jpg,right_fetch_branch,pipeline_module,Fetch & Branch Prediction,TRUE,business_content,右侧取指与分支预测模块
+img_9.jpg,right_integer_prf,pipeline_module,Integer PRF 222 Entry,TRUE,business_content,右侧整数物理寄存器文件容量
+img_9.jpg,right_fp_simd_prf,pipeline_module,FP & SIMD PRF 222 Entry,TRUE,business_content,右侧浮点与SIMD物理寄存器文件容量
+img_9.jpg,right_decode,pipeline_module,8 Wide Decode,TRUE,business_content,右侧解码宽度
+img_9.jpg,right_map_rename,pipeline_module,Map & Rename,TRUE,business_content,右侧映射与重命名模块
+img_9.jpg,right_issue_width,pipeline_module,8 μ-ops,TRUE,business_content,右侧后端发射宽度标注
+img_9.jpg,right_int_scheduler,scheduler_module,INT Scheduler ~105 Entry,TRUE,business_content,右侧整数调度器容量
+img_9.jpg,right_ldst_scheduler,scheduler_module,LD & ST Scheduler 28 Entry,TRUE,business_content,右侧读写调度器容量
+img_9.jpg,right_fp_scheduler,scheduler_module,FP Scheduler 96 Entry,TRUE,business_content,右侧浮点调度器容量
+img_9.jpg,right_reorder_buffer,buffer_size,Re-order Buffer 442 Entry,TRUE,business_content,右侧重排序缓冲容量
+img_9.jpg,right_stq,buffer_size,STQ 68 Entry,TRUE,business_content,右侧存储队列容量
+img_9.jpg,right_ldq,buffer_size,LDQ 163 Entry,TRUE,business_content,右侧加载队列容量
+img_9.jpg,right_l1_data_cache,cache_module,L1 Data Cache 64KB,TRUE,business_content,右侧一级数据缓存容量
+img_9.jpg,right_l1d_tlb,tlb_size,L1D TLB 256 pages,TRUE,business_content,右侧一级数据TLB容量
+img_9.jpg,right_l2d_tlb,tlb_size,L2D TLB 1024 pages,TRUE,business_content,右侧二级数据TLB容量

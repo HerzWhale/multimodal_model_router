@@ -1,0 +1,88 @@
+{
+  "schema_version": "v1",
+  "batch_id": "batch_paddleocr_smoke_20260723",
+  "generated_at": "2026-07-23T15:48:09+08:00",
+  "file_stats": {
+    "total_files": 2,
+    "success_files": 0,
+    "partial_success_files": 2,
+    "failed_files": 0,
+    "skipped_files": 0,
+    "success_rate": 0.0,
+    "failure_rate": 0.0,
+    "partial_success_rate": 1.0
+  },
+  "cost_stats": {
+    "budget_limit_cny": 50.0,
+    "total_cost_cny": 0.020054,
+    "avg_cost_per_file_cny": 0.010027,
+    "avg_cost_per_success_file_cny": 0.0,
+    "cost_by_task_type": {
+      "ocr": 0.0,
+      "text_analysis": 5.4e-05,
+      "visual_understanding": 0.02
+    },
+    "cost_by_provider": {
+      "deepseek": 5.4e-05,
+      "paddlepaddle": 0.0,
+      "qwen": 0.02
+    },
+    "budget_used_rate": 0.000401
+  },
+  "latency_stats": {
+    "total_processing_time_ms": 15306.0,
+    "avg_processing_time_per_file_ms": 7653.0,
+    "avg_model_latency_ms": 2550.833333,
+    "p95_model_latency_ms": 15298.0,
+    "latency_by_task_type": {
+      "ocr": {
+        "avg_latency_ms": 7652.5,
+        "p95_latency_ms": 15298.0
+      },
+      "text_analysis": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      },
+      "visual_understanding": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      }
+    },
+    "latency_by_provider": {
+      "deepseek": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      },
+      "paddlepaddle": {
+        "avg_latency_ms": 7652.5,
+        "p95_latency_ms": 15298.0
+      },
+      "qwen": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      }
+    },
+    "slowest_file_id": "file_0001"
+  },
+  "error_quality_stats": {
+    "total_errors": 2,
+    "errors_by_level": {
+      "model_call": 2
+    },
+    "errors_by_task_type": {
+      "ocr": 2
+    },
+    "top_error_messages": [
+      {
+        "message": "PaddleOCR 本地推理失败：[json.exception.parse_error.101] parse error at line 1, column 1: attempting to parse an empty input; check that your input string or stream contains the expected JSON",
+        "count": 2
+      }
+    ],
+    "quality_flags_count": {
+      "ocr_failed": 2
+    },
+    "partial_success_reasons": {
+      "ocr_failed": 2
+    }
+  }
+}

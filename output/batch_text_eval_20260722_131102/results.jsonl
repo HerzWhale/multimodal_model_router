@@ -1,0 +1,938 @@
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0001",
+  "file_name": "01_news_city_transport.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\01_news_city_transport.txt",
+  "file_size_bytes": 865,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:12:08+08:00",
+  "raw_text": "标题：暴雨后南城地铁 3 号线恢复运营，早高峰仍需限流\n\n视频字幕整理：\n昨晚 8 点左右，南城多区出现短时强降雨，地铁 3 号线河西站到文化公园站区间一度暂停运营。今天早上 6 点，市轨道交通集团发布通报称，积水路段已经完成排查，3 号线全线恢复运行，但河西站、体育中心站和文化公园站在早高峰期间继续采取分批进站措施。\n\n现场画面里，工作人员在站厅引导乘客排队，广播反复提醒“请预留换乘时间”。有乘客表示，虽然恢复运营，但进站比平时多花了大约 15 分钟。交通部门称，公交接驳车会继续保留到晚高峰结束，并建议市民通过官方 App 查询实时客流。\n\n评论区有人讨论上班迟到问题，也有人询问周末演唱会散场是否会受影响。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "news",
+  "secondary_topics": [],
+  "tags": [
+    "暴雨",
+    "地铁3号线",
+    "恢复运营",
+    "早高峰",
+    "限流"
+  ],
+  "summary": "昨晚南城暴雨导致地铁3号线部分区间暂停运营，今早6点恢复全线运行，但河西站、体育中心站和文化公园站在早高峰期间继续采取限流措施，公交接驳车保留至晚高峰结束。",
+  "business_use": "用于新闻内容分类、突发事件舆情监测及城市交通管理决策支持",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0001_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0001_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.00098,
+  "processing_time_ms": 3543
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0002",
+  "file_name": "02_finance_ai_chip_market.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\02_finance_ai_chip_market.txt",
+  "file_size_bytes": 804,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:12:13+08:00",
+  "raw_text": "标题：AI 芯片又涨价？云厂商采购节奏可能比股价更值得看\n\n口播稿：\n最近几家算力芯片和服务器厂商陆续披露季度数据，很多人第一反应是“AI 需求太强了，相关公司是不是还能继续涨”。但如果把财报拆开看，会发现事情没有这么简单。部分公司收入确实受益于训练集群和推理服务器采购，但毛利率、预付款比例、库存周转和大客户集中度也在变得更敏感。\n\n这条视频不是推荐买卖股票，而是提醒大家看产业链时不要只盯“AI 芯片”四个字。比如上游先进封装产能紧张，会影响交付节奏；下游云厂商资本开支放缓，又会影响订单兑现。即便技术方向没变，公司的现金流和议价能力也可能完全不同。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "finance_business",
+  "secondary_topics": [
+    "technology"
+  ],
+  "tags": [
+    "AI芯片",
+    "云厂商",
+    "财报分析",
+    "资本开支",
+    "库存周转"
+  ],
+  "summary": "分析AI芯片和服务器厂商的季度财报，指出虽然收入受益于训练集群和推理服务器采购，但毛利率、预付款比例、库存周转和大客户集中度等指标更值得关注。强调不要只盯着AI芯片概念，而应考虑上游先进封装产能紧张和下游云厂商资本开支放缓对订单兑现的影响，以及公司现金流和议价能力的差异。",
+  "business_use": "可用于投资研究、财经新闻分析、产业链风险提示等场景，帮助投资者深入理解AI芯片产业链的财务指标和商业风险。",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0002_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0002_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.00113,
+  "processing_time_ms": 4326
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0003",
+  "file_name": "03_ads_phone_campaign.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\03_ads_phone_campaign.txt",
+  "file_size_bytes": 753,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:12:17+08:00",
+  "raw_text": "标题：这次换机补贴到底怎么用？我把活动规则给你拆开\n\n视频口播：\n最近后台很多人问这台新机值不值得冲，先说清楚，这条是品牌合作内容，我会把优惠规则讲明白。活动时间到本周日晚上 12 点，指定机型可以叠加平台券、以旧换新补贴和 12 期免息。如果你手里是两三年前的老机型，回收价加补贴大概能省 600 到 900 元，但不同城市门店政策会有差异。\n\n画面里会展示夜景样张、游戏帧率和充电速度，不过这些体验不是本条内容的重点。重点是告诉你：怎么买更便宜、哪些赠品需要手动领取、哪些套餐其实没必要加。评论区如果想要表格，我会放在置顶链接。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "ads_marketing",
+  "secondary_topics": [
+    "technology",
+    "lifestyle"
+  ],
+  "tags": [
+    "换机补贴",
+    "活动规则",
+    "以旧换新",
+    "省钱技巧",
+    "品牌合作"
+  ],
+  "summary": "该内容为品牌合作视频，详细介绍换机补贴活动规则，包括平台券、以旧换新补贴、12期免息等优惠，强调如何省钱购买新机，并提醒政策差异和赠品领取注意事项。重点在于营销推广，帮助用户理解优惠细则。",
+  "business_use": "可用于分析营销活动效果、用户消费决策行为，以及优化促销策略和内容投放。",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0003_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0003_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.001047,
+  "processing_time_ms": 4000
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0004",
+  "file_name": "04_technology_ai_agent_update.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\04_technology_ai_agent_update.txt",
+  "file_size_bytes": 931,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:12:22+08:00",
+  "raw_text": "标题：我试了新版 AI Agent 工作流，终于能看清它每一步调用了什么\n\n视频脚本：\n今天不是讲融资，也不是讲概念，我直接录屏试一下这个新版 Agent 工作流。左边是任务配置区，可以把“读取文档”“调用搜索”“执行脚本”“整理结论”串成一个流程；右边是运行日志，会显示每一步输入了什么、调用了哪个工具、有没有报错。\n\n我用一个产品竞品分析任务做测试：先让它读取三份资料，再抽取价格、功能、发布时间，最后生成对比表。以前这类工具最大的问题是黑箱，失败了只会说“任务未完成”；这次至少能看到是哪一步权限不足，还是工具返回为空。\n\n评论里有人问能不能替代运营同学，我觉得现在还不行。更现实的价值是把重复的信息整理流程自动化，并让团队能追踪模型和工具链路。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "technology",
+  "secondary_topics": [
+    "knowledge"
+  ],
+  "tags": [
+    "AI Agent",
+    "工作流",
+    "任务自动化",
+    "竞品分析",
+    "透明性"
+  ],
+  "summary": "用户通过录屏演示新版AI Agent工作流，展示了如何配置任务流程（读取文档、调用搜索、执行脚本、整理结论）以及查看运行日志以追踪每一步的输入、工具调用和错误。以产品竞品分析为例，测试了自动化信息整理流程，强调相比黑箱模型，该工具提供了链路透明性，利于团队调试和优化。评论指出当前尚不能替代运营人员，但能自动化重复性信息整理工作。",
+  "business_use": "可用于技术产品功能展示、AI工具评测内容生产、开发者社区推广或企业自动化方案介绍。",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0004_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0004_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.001173,
+  "processing_time_ms": 5121
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0005",
+  "file_name": "05_sports_health_home_training.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\05_sports_health_home_training.txt",
+  "file_size_bytes": 831,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:12:27+08:00",
+  "raw_text": "标题：久坐上班族别一上来就跳燃脂操，先把这 4 个动作练稳\n\n口播稿：\n很多人下班后想运动，打开视频就跟着高强度燃脂操跳，第二天膝盖和腰都不舒服。我的建议是，先用 20 分钟做基础力量和活动度。第一组是靠墙深蹲，注意膝盖方向和脚尖一致；第二组是跪姿俯卧撑，先把肩胛控制住；第三组是死虫式，主要练核心稳定；最后用髋屈肌拉伸收尾。\n\n字幕提示：如果你已经有膝盖损伤、腰椎间盘问题或长期疼痛，先咨询医生或线下教练，不要直接照搬。训练不是越累越有效，睡眠不足、饮食太少的时候，强度也要降下来。\n\n评论区常见问题：能不能减脂？可以辅助，但真正影响体脂的是长期热量平衡和力量训练坚持。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "sports_health",
+  "secondary_topics": [
+    "lifestyle",
+    "knowledge"
+  ],
+  "tags": [
+    "久坐上班族",
+    "基础力量训练",
+    "膝盖保护",
+    "核心稳定",
+    "燃脂操"
+  ],
+  "summary": "给久坐上班族的健身建议：不要直接跳高强度燃脂操，应先练习4个基础动作（靠墙深蹲、跪姿俯卧撑、死虫式、髋屈肌拉伸），以提升力量和活动度，避免膝盖和腰部损伤。同时提醒，有伤病史者需先咨询医生，且减脂需结合长期热量平衡和力量训练。",
+  "business_use": "可用于健康类内容推荐、健身课程智能推荐、用户运动损伤风险提示、相关产品（护具、瑜伽垫）广告定向投放",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0005_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0005_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.001349,
+  "processing_time_ms": 5471
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0006",
+  "file_name": "06_entertainment_movie_variety.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\06_entertainment_movie_variety.txt",
+  "file_size_bytes": 676,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:12:31+08:00",
+  "raw_text": "标题：昨晚这档综艺最出圈的不是舞台，是嘉宾临场救场\n\n视频文案：\n昨晚新一期节目上线后，热搜前排基本被两段内容占了：一段是开场舞台灯光出问题，嘉宾临时用清唱撑了 40 秒；另一段是游戏环节里两位演员互相接梗，把原本很尴尬的惩罚环节变成了全场笑点。弹幕里有人说这是剧本，也有人觉得这种临场反应才是老综艺人的功底。\n\n节目组今天中午发了花絮，能看到导演组当时确实在耳返里临时调整流程。粉丝主要讨论舞台造型、嘉宾互动和下一期飞行嘉宾名单，也有人把片段剪成了二创表情包。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "entertainment",
+  "secondary_topics": [
+    "other"
+  ],
+  "tags": [
+    "综艺节目",
+    "临场反应",
+    "救场",
+    "热搜",
+    "粉丝讨论"
+  ],
+  "summary": "昨晚一档综艺节目中，舞台灯光出现故障，嘉宾临时用清唱支撑40秒；游戏环节中两位演员通过即兴接梗化解尴尬，成为节目亮点。相关片段登上热搜，节目组发布花絮显示导演组临时调整流程。粉丝主要讨论舞台造型、嘉宾互动及下一期嘉宾，并有二创表情包传播。",
+  "business_use": "可用于综艺节目热度监测、艺人临场表现评估、舆情分析及社交媒体传播策略优化。",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0006_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0006_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.000998,
+  "processing_time_ms": 4096
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0007",
+  "file_name": "07_lifestyle_travel_food.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\07_lifestyle_travel_food.txt",
+  "file_size_bytes": 812,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:12:38+08:00",
+  "raw_text": "标题：一个人去海边小城待 36 小时，不赶景点也挺舒服\n\n图文说明：\n周五晚上坐高铁到海边小城，出站后没有立刻去打卡景点，而是先在民宿楼下吃了一碗海鲜面。第二天早上 7 点去菜市场，看摊主把刚到港的小鱼分装，旁边阿姨一直在讲哪家店不会宰客。中午沿着老街慢慢走，买了冰豆花和手作明信片，下午回房间睡了一觉，傍晚再去码头看日落。\n\n这条不是攻略合集，所以不会列“必去 10 个地方”。我更想记录的是一种短暂离开工作节奏的感觉：不用赶时间，不用拍很完整的 vlog，也不用每顿都吃网红店。总花费大概 600 多元，适合想周末换个环境的人。\n\n评论区有人问路线和店名，我会整理在下一条。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "lifestyle",
+  "secondary_topics": [
+    "other"
+  ],
+  "tags": [
+    "海边小城",
+    "周末旅行",
+    "慢生活",
+    "海鲜面",
+    "码头日落"
+  ],
+  "summary": "作者分享独自去海边小城度过36小时的经历，不赶景点，享受慢节奏：吃海鲜面、逛菜市场、买冰豆花和明信片、午睡、看日落，总花费约600元。记录短暂离开工作节奏的轻松感，适合周末换个环境。",
+  "business_use": "可用于生活方式类内容推荐、旅行攻略标签分类、用户兴趣画像构建等",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0007_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0007_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.001408,
+  "processing_time_ms": 6295
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0008",
+  "file_name": "08_knowledge_history_science.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\08_knowledge_history_science.txt",
+  "file_size_bytes": 887,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:12:42+08:00",
+  "raw_text": "标题：为什么很多古城都离河很近？不只是为了喝水\n\n讲解稿：\n如果你看古代城市地图，会发现很多城市都靠近河流。最容易想到的原因是饮水和灌溉，但这只是第一层。河流还承担了交通功能，在陆路运输成本很高的时代，粮食、木材、盐和陶器沿水路运输会便宜得多。一个城市能不能稳定获得物资，往往会影响它能养活多少人口。\n\n第二层是防御和边界。护城河不是每个城市都有，但天然河道会影响城墙选址、码头位置和市场分布。第三层是治理能力：修堤、疏浚、分水和管理渡口，都需要组织能力。也就是说，河流不仅塑造城市位置，也反过来考验一个政权或地方社会的管理水平。\n\n评论区有人问这算历史还是地理，也有人补充了自己家乡古城的水系变化。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "knowledge",
+  "secondary_topics": [],
+  "tags": [
+    "古城",
+    "河流",
+    "交通",
+    "防御",
+    "治理"
+  ],
+  "summary": "本文解释了古代城市靠近河流的多重原因：不仅是饮水和灌溉，更重要的是河流降低了运输成本，促进了物资流通；其次，河流作为天然屏障影响防御布局；最后，河流治理考验政权组织能力，体现了地理与人文的互动。",
+  "business_use": "可用于知识类内容推荐、历史地理知识库建设、教育素材分类等。",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0008_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0008_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.001023,
+  "processing_time_ms": 4307
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0009",
+  "file_name": "09_finance_tech_ai_cloud_capex.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\09_finance_tech_ai_cloud_capex.txt",
+  "file_size_bytes": 727,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:12:46+08:00",
+  "raw_text": "标题：大厂 AI 云服务降价，是技术进步还是抢客户？\n\n口播稿：\n最近几家云厂商都在宣传 AI 推理服务降价，有的说价格下降 40%，有的强调新芯片集群上线后吞吐提升。听起来像是技术新闻，但如果从公司经营角度看，真正的问题是：降价会不会压缩毛利？客户增长能不能覆盖算力投入？资本开支什么时候开始回收？\n\n有投资人把这件事理解为“AI 基础设施进入价格战”，也有人认为这是云厂商用低价换生态位。视频里会提到 GPU、国产芯片、推理成本和模型调用价格，但核心不是讲技术原理，而是分析云厂商的收入结构、竞争策略和利润压力。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "finance_business",
+  "secondary_topics": [
+    "technology"
+  ],
+  "tags": [
+    "AI云服务",
+    "降价",
+    "价格战",
+    "云计算",
+    "利润压力"
+  ],
+  "summary": "该内容围绕AI云服务降价现象，从公司经营角度分析降价对毛利、客户增长、资本开支回收的影响，并解读为云厂商的价格战和生态位竞争，核心讨论收入结构、竞争策略和利润压力，而非技术原理。",
+  "business_use": "支持云厂商竞争策略分析、财务影响评估及投资决策参考",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0009_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0009_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.000954,
+  "processing_time_ms": 3544
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0010",
+  "file_name": "10_ads_disguised_phone_review.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\10_ads_disguised_phone_review.txt",
+  "file_size_bytes": 637,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:12:50+08:00",
+  "raw_text": "标题：这台新机我用了 7 天，说说真实感受\n\n视频文案：\n先声明一下，这期是品牌合作，但体验部分我会按自己的使用情况说。过去一周我主要测试了拍照、续航和游戏发热。白天样张确实很稳，夜景高光压得比上一代好；不过连续打游戏 40 分钟后，边框还是会明显发热。\n\n但这期视频重点不是单纯测评，因为评论区置顶会放活动入口。现在下单可以领平台券，加上以旧换新补贴和分期免息，实际到手价会比首发价低不少。适合最近确实要换机的人，不建议为了赠品冲动下单。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "ads_marketing",
+  "secondary_topics": [
+    "technology",
+    "lifestyle"
+  ],
+  "tags": [
+    "手机测评",
+    "品牌合作",
+    "促销活动",
+    "以旧换新",
+    "分期免息"
+  ],
+  "summary": "视频为品牌合作内容，作者分享了一周使用新手机的真实体验，包括拍照、续航和游戏发热情况。重点在于评论区置顶的活动入口，提供平台券、以旧换新补贴和分期免息等优惠，旨在促进销售转化。",
+  "business_use": "可用于广告投放效果分析、品牌合作内容识别及促销活动评估。",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0010_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0010_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.001037,
+  "processing_time_ms": 4022
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0011",
+  "file_name": "11_news_entertainment_film_festival_incident.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\11_news_entertainment_film_festival_incident.txt",
+  "file_size_bytes": 633,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:12:53+08:00",
+  "raw_text": "标题：电影节红毯临时取消，主办方回应安全管控原因\n\n字幕整理：\n昨晚，某电影节原定 19 点开始的户外红毯环节临时取消。现场粉丝和媒体已经提前到达，但工作人员在 18 点 40 分左右通知观众离场。主办方随后发布说明称，因现场人流密度超过预案标准，为保障公共安全，决定取消红毯拍摄和明星互动环节。\n\n评论区很多人在讨论某位演员是否已经到场，也有人质疑主办方通知太晚。当地文旅部门表示，后续会对大型活动的人流组织、票务发放和现场安保流程进行复盘。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "entertainment",
+  "secondary_topics": [
+    "news",
+    "other"
+  ],
+  "tags": [
+    "电影节",
+    "红毯取消",
+    "安全管控",
+    "主办方回应",
+    "粉丝"
+  ],
+  "summary": "某电影节原定19点开始的户外红毯环节因现场人流密度超过预案标准临时取消，主办方为保障公共安全决定取消红毯拍摄和明星互动环节。现场粉丝和媒体已提前到达，工作人员在18点40分通知离场。评论区讨论某演员是否到场，质疑通知太晚。当地文旅部门将对大型活动的人流组织、票务和安保流程进行复盘。",
+  "business_use": "可用于娱乐行业舆情监测、活动组织风险预警及粉丝情绪分析",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0011_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0011_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.000933,
+  "processing_time_ms": 3065
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0012",
+  "file_name": "12_knowledge_with_soft_ad_nutrition.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\12_knowledge_with_soft_ad_nutrition.txt",
+  "file_size_bytes": 660,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:12:57+08:00",
+  "raw_text": "标题：为什么很多人控糖失败？先看懂配料表这三行\n\n讲解稿：\n很多人以为“不吃甜食”就等于控糖，其实饮料、酸奶和即食麦片里的添加糖更容易被忽略。看配料表时，第一步不是看包装上的“轻食”“健康”，而是看碳水化合物和糖的含量；第二步看配料顺序，如果白砂糖、果葡糖浆排得很靠前，就说明占比不低；第三步看每份重量，有些产品一袋其实是两份。\n\n视频最后会顺手提到我最近在喝的一款无糖酸奶，但这不是本条内容的重点。重点是教你如何读营养标签，而不是推荐具体品牌。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "lifestyle",
+  "secondary_topics": [
+    "knowledge"
+  ],
+  "tags": [
+    "控糖",
+    "配料表",
+    "营养标签",
+    "添加糖",
+    "健康饮食"
+  ],
+  "summary": "本内容讲解如何通过阅读食品配料表来有效控糖，重点介绍了三个步骤：看碳水化合物和糖的含量、看配料顺序（白砂糖、果葡糖浆是否靠前）、看每份重量。提醒人们不要被‘轻食’、‘健康’等标签误导，并举例说明饮料、酸奶、即食麦片中的隐藏添加糖。",
+  "business_use": "可用于健康饮食类内容的推荐和标签分类，帮助用户获取控糖知识，也适合营养科普平台或健康类应用的内容结构化",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0012_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0012_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.001117,
+  "processing_time_ms": 4601
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0013",
+  "file_name": "13_lifestyle_commerce_travel_hotel.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\13_lifestyle_commerce_travel_hotel.txt",
+  "file_size_bytes": 878,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:13:03+08:00",
+  "raw_text": "标题：周末住进山里两天，我终于睡了一个完整觉\n\n图文说明：\n这家民宿在山脚下，房间窗外就是竹林。第一天下午到的时候下小雨，老板给了热茶，晚上没有安排太多活动，只是在公共客厅看电影。第二天早上 8 点自然醒，吃了米粥、鸡蛋和小菜，然后沿着山路走了半小时。\n\n文末会放房型和价格，因为很多人问链接。但这篇主要是记录一次短途休息体验，不是酒店测评合集，也不是优惠活动说明。适合想找个地方安静待两天的人参考。\n\n视频字幕：房间隔音普通，夜里能听到雨声和走廊脚步；山里手机信号不太稳定，我索性把工作消息关了。返程前在村口买了两袋笋干，老板告诉我不同季节的公交班次会调整，准备自己来的话最好提前确认末班车时间。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "lifestyle",
+  "secondary_topics": [
+    "other"
+  ],
+  "tags": [
+    "民宿",
+    "短途旅行",
+    "休息",
+    "自然醒",
+    "山里体验"
+  ],
+  "summary": "作者记录了一次周末在山里民宿的休息体验：住进山脚下民宿，窗外竹林，下午小雨喝热茶，晚上看电影，第二天自然醒吃简单早餐，沿山路散步。住宿隔音一般，手机信号弱，但作者关闭工作消息。返程买笋干，提醒注意公交班次。整体是短途放松记录，非酒店测评或优惠活动。",
+  "business_use": "支持生活方式类内容推荐、旅游民宿体验分析、用户兴趣挖掘",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0013_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0013_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.001102,
+  "processing_time_ms": 5349
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0014",
+  "file_name": "14_sports_health_public_event_marathon.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\14_sports_health_public_event_marathon.txt",
+  "file_size_bytes": 894,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:13:07+08:00",
+  "raw_text": "标题：半马赛后多人抽筋，普通跑者该怎么准备补给？\n\n口播稿：\n周末一场半程马拉松结束后，社交平台上不少跑者晒出抽筋、脱水和低血糖经历。赛事组委会回应称，补给点设置符合标准，但当天气温升高，部分参赛者配速过快，可能增加身体负担。\n\n这条视频不是追责报道，而是想讲普通跑者应该怎么准备。赛前一周不要突然加量，比赛当天不要空腹起跑；超过 60 分钟的跑步要考虑电解质和能量胶；如果出现头晕、胸闷、意识不清，不要硬撑完赛。\n\n图文说明：配图会区分普通疲劳、肌肉痉挛和需要立即求助的危险信号，也会列出不同配速下的补水频率示例。每个人的出汗量和训练基础不同，表格只能作为准备思路，不能替代医生诊断或专业教练给出的个人计划。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "sports_health",
+  "secondary_topics": [
+    "knowledge"
+  ],
+  "tags": [
+    "半程马拉松",
+    "跑者补给",
+    "电解质",
+    "抽筋",
+    "运动健康"
+  ],
+  "summary": "半程马拉松赛后多人出现抽筋、脱水和低血糖，视频为普通跑者提供补给准备建议：赛前一周不突然加量，比赛当天不空腹起跑；超过60分钟跑步需考虑电解质和能量胶；出现头晕等危险信号应停止。并区分疲劳、痉挛和危险信号，提供不同配速下的补水频率示例，但强调个人差异，不能替代专业诊断。",
+  "business_use": "可用于运动类内容个性化推荐、赛事运营指导、运动营养品营销以及跑者教育内容生成。",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0014_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0014_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.001176,
+  "processing_time_ms": 4943
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0015",
+  "file_name": "15_technology_long_local_ai_workflow.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\15_technology_long_local_ai_workflow.txt",
+  "file_size_bytes": 2767,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:13:12+08:00",
+  "raw_text": "标题：把三套本地 AI 工具接成一条工作流后，我才发现真正难的不是模型\n\n视频口播稿：\n过去一个月，我们尝试把团队里分散使用的三个 AI 工具接到同一条内容处理流程里。第一个工具负责读取长文档，第二个工具负责从图片里提取文字，第三个工具负责根据前两步的结果生成摘要和分类。最开始大家以为，只要把三个接口按顺序调用就行，实际跑起来才发现，真正麻烦的是数据格式、任务状态和失败恢复。\n\n先说输入。文档工具返回的是分段文本，图片工具返回的是带坐标的识别结果，分析工具却只接受一段整理好的自然语言。如果直接把所有内容拼起来，输入长度很快超过限制，而且图片中的表格顺序会被打乱。我们后来给每一段证据增加来源标记，再按文件、页码和时间顺序合并。这样模型生成结论时，至少能说明某句话来自原文、截图还是补充说明。\n\n第二个问题是异步任务。图片数量一多，识别速度就会明显慢于文本读取。如果主程序一直等待，整批文件都会被最慢的一张图卡住。我们改成任务队列后，每个文件都拥有独立状态：等待、处理中、部分完成和失败。某张图片识别失败时，系统不会假装整份文件已经成功，而是保留其他证据继续分析，并把缺失部分写进结果。\n\n第三个问题是模型输出并不稳定。同一个模型有时返回完整 JSON，有时会在 JSON 前后补解释文字。只靠提示词要求“严格输出”不够，我们在程序端增加了结构校验，缺少关键字段时直接拒绝写入正式结果。摘要过长会被截断，分类不在允许范围内会标记异常，关键词也会去重。这里没有展示任何付费产品，也没有购买链接，演示使用的都是本地测试文件。\n\n画面字幕：\n流程图会依次展示文件监听、预处理、任务队列、模型调用、结构校验和结果写入。日志页面能看到每一步的开始时间、结束时间、调用模型和错误原因。为了避免误调用线上接口，默认配置只运行模拟后端；只有在命令行明确授权后，程序才会读取真实密钥。\n\n评论区补充：\n有人问这种工作流是不是换一个更大的模型就能省掉工程代码。我的答案是否定的。模型能力再强，也不会自动解决文件追踪、成本核算、重试边界和数据格式兼容。大模型负责理解内容，普通程序负责保证流程可控，两部分缺一不可。下一期我会继续拆解怎样统计单文件成本和批次 P95 延迟，但这次先把数据在各模块之间怎样流动讲清楚。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "technology",
+  "secondary_topics": [
+    "knowledge",
+    "other"
+  ],
+  "tags": [
+    "AI工作流",
+    "本地工具",
+    "任务队列",
+    "数据格式",
+    "结构校验"
+  ],
+  "summary": "本文分享将三套本地AI工具整合成一条内容处理工作流的实践经验。重点讨论了数据格式兼容（文档分段文本、图片坐标识别结果与自然语言输入的转换）、异步任务管理（通过任务队列实现独立状态跟踪与失败恢复）以及模型输出稳定性（增加结构校验和字段验证）等工程难题。作者强调，模型能力再强也无法自动解决文件追踪、成本核算和流程可控性问题，普通程序在保证流程可靠性方面不可或缺。文章未涉及任何付费产品或商业推广，仅使用本地测试文件。",
+  "business_use": "可用于技术团队学习本地AI工具集成、工作流设计与异常处理的最佳实践，也可作为技术选型或培训材料，帮助工程人员理解模型与工程代码的协同关系。",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0015_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0015_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.00153,
+  "processing_time_ms": 4772
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0016",
+  "file_name": "16_entertainment_long_variety_production.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\16_entertainment_long_variety_production.txt",
+  "file_size_bytes": 2519,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:13:18+08:00",
+  "raw_text": "标题：一段十分钟的综艺正片，为什么剪辑室里要反复改四天\n\n视频文案：\n这期节目播出后，很多观众都在讨论餐厅游戏环节。正片里只有十分钟：嘉宾分成两组完成盲猜菜名，输的一方接受即兴表演惩罚。看起来节奏很快，笑点也像是自然发生的，但节目组放出的幕后花絮显示，这段内容从录制到上线经历了多轮调整。\n\n第一版剪辑更接近现场顺序。嘉宾先听规则，然后试吃、讨论、争论答案，最后公布结果。问题是现场录了将近两个小时，很多对话虽然真实，却没有推动情节。剪辑师把重复讨论删掉以后，又发现人物关系变得太突然：前一分钟两个人还在互相质疑，下一分钟已经一起完成惩罚。为了让观众看懂情绪变化，第二版补回了几个眼神反应和候场区对话。\n\n第三版主要调整笑点位置。预告片里最出圈的“把香菜认成薄荷”原本出现在中段，但平台希望开头三分钟就出现明显记忆点，于是把相关反应镜头提前，同时保留比赛结果不变。导演担心这样会让熟悉剪辑语言的观众猜到后续反转，后期又用另一位嘉宾的采访做遮挡。最后上线的版本，还增加了手绘字幕和两处音效，但删除了一段可能引发误解的玩笑。\n\n字幕整理：\n节目播出当晚，相关话题进入热榜。有粉丝认为某位嘉宾的镜头太少，也有人根据衣服和座位变化推测节目调整了时间线。制作人随后在直播中回应，真人秀并不等于把监控录像原样播放，剪辑需要在事实顺序、人物表达和观看节奏之间做取舍，但不会改变比赛最终结果。\n\n图文说明：\n配图包括录制现场的机位分布、时间轴上的素材轨道、导演修改意见以及最终播出版片段。文章不会讨论节目公司的收入、平台招商合同或艺人商业报价，也没有节目会员购买入口。重点放在嘉宾互动、节目效果、幕后制作和观众对叙事节奏的讨论。\n\n评论区补充：\n有人觉得幕后流程破坏了“真人感”，也有人认为剪辑本来就是综艺表达的一部分。还有观众开始比较前几季同类环节，认为旧版本更依赖嘉宾临场反应，新版本则使用了更多字幕包装。无论站在哪一边，这段争论都说明观众消费的不只是一个游戏结果，也包括人物关系、舞台效果和节目制造的情绪体验。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "entertainment",
+  "secondary_topics": [
+    "knowledge",
+    "other"
+  ],
+  "tags": [
+    "综艺剪辑",
+    "幕后制作",
+    "节目效果",
+    "观众讨论",
+    "剪辑流程"
+  ],
+  "summary": "本文讨论综艺正片剪辑的幕后过程。一段十分钟的节目，实际录制近两小时，剪辑师需在事实顺序、人物表达和观看节奏之间权衡，通过删除重复对话、调整笑点位置、补回反应镜头等方式优化。最终版本引发观众对“真人感”和叙事节奏的讨论，制作人回应称剪辑不会改变比赛结果。",
+  "business_use": "可用于指导综艺剪辑策略，帮助制作团队理解观众对剪辑敏感点，平衡真实性与观赏性，提升节目效果与用户讨论度。",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0016_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0016_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.001523,
+  "processing_time_ms": 5285
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0017",
+  "file_name": "17_other_long_campus_lost_found.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\17_other_long_campus_lost_found.txt",
+  "file_size_bytes": 2516,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:13:23+08:00",
+  "raw_text": "标题：校园失物集中认领开始了，证件、钥匙和电子设备要分开核验\n\n视频口播：\n从本周三开始，学校失物招领点会对过去两个月收到的物品进行集中整理。地点在东区综合服务楼一层，不在学生会办公室。开放时间是工作日中午十二点到两点、晚上六点到八点，周末只在周六上午开放。最近交来的物品比较多，包括校园卡、身份证件、钥匙、耳机、充电器、水杯、雨伞和几台没有开机密码提示的电子设备。\n\n证件类物品可以先在校内服务号输入姓名后两位和丢失日期查询。如果系统显示“待核验”，本人需要携带另一种有效证件到现场确认。为了保护隐私，工作人员不会在评论区公开完整姓名、学号、证件照片或联系方式。请不要让陌生人代领身份证和银行卡，也不要根据网络留言向所谓“拾到者”支付转账费用。\n\n钥匙和无明显身份信息的物品需要描述细节，例如钥匙数量、挂件颜色、大致丢失位置，以及水杯或雨伞上的特殊标记。现场不会要求认领者说出所有细节，但至少要有两项能够对应。电子设备需要当面解锁，或者提供购买记录、设备序列号等证明。仅凭相似外观照片不能直接领走。\n\n字幕提示：\n如果你捡到物品，可以交给任意宿舍值班室、图书馆服务台或综合服务楼。工作人员会登记发现时间和地点，但不会记录拾取人的身份证号码。易腐食品、已经开封的药品和无法确认安全性的液体不会长期保存。普通生活用品在公示期结束后会按照学校后勤流程处理，证件和电子设备会保留更长时间。\n\n图文说明：\n第一张图是服务楼入口位置，第二张图是不同物品的登记编号示例，第三张图说明线上查询只显示模糊信息。帖子不提供商品销售、课程推广、旅游路线、明星话题、健身建议或投资观点，也不是对某次突发事件的新闻报道。它主要承担校内事务告知和认领流程说明。\n\n评论区常见问题：\n毕业生能否认领以前遗失的物品，需要先通过校友邮箱联系服务台；校外人员在校园开放时段进入，需要由校内联系人协助登记；如果发现证件已经被冒领，应立即联系保卫处并冻结相关校园账户。请大家不要在评论区贴出证件正反面，也不要把自己的完整手机号公开留下。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "lifestyle",
+  "secondary_topics": [
+    "other"
+  ],
+  "tags": [
+    "失物招领",
+    "校园生活",
+    "证件认领",
+    "电子设备",
+    "流程说明"
+  ],
+  "summary": "校园失物招领点从本周三起集中整理过去两个月收到的物品，地点在东区综合服务楼一层，开放时间为工作日中午12-14点、晚上18-20点，周六上午开放。证件类可通过校内服务号查询，需携带其他有效证件现场确认；钥匙、水杯等需描述细节；电子设备需当面解锁或提供购买记录。捡到物品可交至宿舍值班室、图书馆服务台或综合服务楼，不记录拾取人身份证号。易腐食品等不长期保存，普通生活用品公示期后处理，证件和电子设备保留更长时间。线上查询只显示模糊信息，禁止公开完整个人信息。毕业生需通过校友邮箱联系，校外人员需校内联系人协助。发现冒领应联系保卫处。",
+  "business_use": "用于校园信息聚合、智能问答系统、失物招领流程自动化、学生服务指南更新",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0017_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0017_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.001632,
+  "processing_time_ms": 5121
+}
+{
+  "schema_version": "v1",
+  "batch_id": "batch_text_eval_20260722_131102",
+  "file_id": "file_0018",
+  "file_name": "18_other_long_community_coordination.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\18_other_long_community_coordination.txt",
+  "file_size_bytes": 2691,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T13:12:05+08:00",
+  "processed_at": "2026-07-22T13:13:27+08:00",
+  "raw_text": "标题：社区共享工具间试运行说明，借梯子和电钻前先完成安全登记\n\n口播稿：\n小区公共活动室旁边的共享工具间从下周一开始试运行。首批开放的物品包括折叠梯、手推车、基础螺丝刀套装、测距仪、打气筒和两台家用电钻。这个项目不是商家赞助，也不收会员费，工具主要来自物业原有库存和居民自愿捐赠。试运行阶段只面向已经完成住户登记的本小区居民，不接受外卖骑手、装修队或其他临时来访人员借用。\n\n借用时间为每天上午九点到十一点、下午三点到七点。住户需要在值班台填写房号、联系方式、借用物品编号和预计归还时间。登记信息只用于物品追踪和紧急联系，不会张贴在公共公告栏。普通工具最长借用二十四小时，手推车建议在三小时内归还，折叠梯和电钻当天归还。确实需要延长时间的，应在到期前联系值班人员，不能直接转借给其他住户。\n\n字幕提示：\n领取物品时要和工作人员一起检查外观。电钻需要确认电池、充电器和钻头数量，折叠梯需要检查锁扣，手推车要检查轮子和固定绳。如果发现破损，应在离开工具间前登记。没有登记的旧划痕不会自动认定为借用人造成，但明显撞击、进水或零件缺失需要进一步核实。未成年人不能单独借用带电工具。\n\n安全说明：\n共享工具只适合简单家庭维护，不适合拆改承重结构、燃气管道、电表箱或公共消防设施。不会使用电钻的居民可以在周三晚参加一次基础操作说明，现场只讲开关、钻头安装、防护眼镜和断电检查，不提供装修施工服务。高空作业时必须有人扶梯，不能把折叠梯放在湿滑地面，也不要站在最上一级踏板。\n\n图文说明：\n配图会标出工具间位置、登记表样式、每件工具的编号标签和归还检查区域。帖子不包含购买链接、品牌折扣、投资信息、娱乐节目讨论或个人生活记录，也不是一次突发事件通报。重点是说明一套社区内部的借用、归还、安全和责任确认流程。\n\n评论区常见问题：\n租户可以凭租赁登记借用；行动不便的老人可以由同住家属代办，但实际使用人也需要留下联系方式；工具用完后不需要自行拆机清洁，只要擦掉明显灰尘并把零件装回盒内；如果值班台临时无人，可以扫描门口二维码提交预约，但不能自行进入工具间取走物品。试运行两周后，社区会根据遗失率、损坏情况和居民反馈决定是否调整开放时间。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "knowledge",
+  "secondary_topics": [
+    "lifestyle"
+  ],
+  "tags": [
+    "社区共享工具间",
+    "安全登记",
+    "借用流程",
+    "家庭维护",
+    "电钻安全"
+  ],
+  "summary": "社区共享工具间试运行说明，提供梯子、电钻等工具借用，需完成安全登记，限定本小区居民，有详细借用时间、登记流程、安全检查和责任规定，旨在促进社区资源共享与安全使用。",
+  "business_use": "可用于社区管理或智慧社区平台，提供标准化工具共享服务流程参考，提升居民生活便利性和社区凝聚力。",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0018_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0018_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.00143,
+  "processing_time_ms": 4290
+}

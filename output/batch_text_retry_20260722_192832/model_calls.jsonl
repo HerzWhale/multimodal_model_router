@@ -1,0 +1,25 @@
+{
+  "call_id": "file_0001_call_0001",
+  "batch_id": "batch_text_retry_20260722_192832",
+  "file_id": "file_0001",
+  "task_type": "text_analysis",
+  "provider": "deepseek",
+  "model_name": "deepseek-v4-flash",
+  "input_units": [
+    {
+      "unit_type": "input_tokens",
+      "quantity": 884
+    }
+  ],
+  "output_units": [
+    {
+      "unit_type": "output_tokens",
+      "quantity": 302
+    }
+  ],
+  "cost_cny": 0.0015,
+  "latency_ms": 4386,
+  "started_at": "2026-07-22T19:28:36+08:00",
+  "status": "success",
+  "error_message": null
+}

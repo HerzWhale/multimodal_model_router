@@ -142,7 +142,7 @@ def generate_batch_report(
     skipped_files = sum(1 for result in results if result.get("processing_status") == "skipped")
 
     total_cost_cny = round(sum(float(call.get("cost_cny", 0)) for call in model_calls), 6)
-    success_file_count_for_cost = max(success_files, 1)
+    avg_cost_per_success_file_cny = round(total_cost_cny / success_files, 6) if success_files else 0.0
     model_latencies = [float(call.get("latency_ms", 0)) for call in model_calls]
     processing_times = [float(result.get("processing_time_ms", 0)) for result in results]
     slowest_file = max(results, key=lambda result: result.get("processing_time_ms", 0), default=None)
@@ -165,7 +165,7 @@ def generate_batch_report(
             "budget_limit_cny": budget_limit_cny,
             "total_cost_cny": total_cost_cny,
             "avg_cost_per_file_cny": _rate(total_cost_cny, total_files),
-            "avg_cost_per_success_file_cny": round(total_cost_cny / success_file_count_for_cost, 6),
+            "avg_cost_per_success_file_cny": avg_cost_per_success_file_cny,
             "cost_by_task_type": _sum_by(model_calls, "task_type", "cost_cny"),
             "cost_by_provider": _sum_by(model_calls, "provider", "cost_cny"),
             "budget_used_rate": round(total_cost_cny / budget_limit_cny, 6) if budget_limit_cny else 0.0,

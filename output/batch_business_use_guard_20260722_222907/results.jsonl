@@ -1,0 +1,52 @@
+{
+  "schema_version": "v1",
+  "batch_id": "batch_business_use_guard_20260722_222907",
+  "file_id": "file_0014",
+  "file_name": "14_sports_health_public_event_marathon.txt",
+  "media_type": "text",
+  "source_path": "H:\\实习\\multimodal_model_router\\evaluation\\text_topic_small_set\\14_sports_health_public_event_marathon.txt",
+  "file_size_bytes": 894,
+  "duration_ms": null,
+  "language": "unknown",
+  "created_at": "2026-07-22T22:29:07+08:00",
+  "processed_at": "2026-07-22T22:29:13+08:00",
+  "raw_text": "标题：半马赛后多人抽筋，普通跑者该怎么准备补给？\n\n口播稿：\n周末一场半程马拉松结束后，社交平台上不少跑者晒出抽筋、脱水和低血糖经历。赛事组委会回应称，补给点设置符合标准，但当天气温升高，部分参赛者配速过快，可能增加身体负担。\n\n这条视频不是追责报道，而是想讲普通跑者应该怎么准备。赛前一周不要突然加量，比赛当天不要空腹起跑；超过 60 分钟的跑步要考虑电解质和能量胶；如果出现头晕、胸闷、意识不清，不要硬撑完赛。\n\n图文说明：配图会区分普通疲劳、肌肉痉挛和需要立即求助的危险信号，也会列出不同配速下的补水频率示例。每个人的出汗量和训练基础不同，表格只能作为准备思路，不能替代医生诊断或专业教练给出的个人计划。\n",
+  "ocr_text": null,
+  "audio_transcript": null,
+  "visual_description": null,
+  "topic": "sports_health",
+  "secondary_topics": [
+    "knowledge"
+  ],
+  "tags": [
+    "半程马拉松",
+    "抽筋",
+    "补给",
+    "运动安全",
+    "电解质"
+  ],
+  "summary": "本内容针对半程马拉松赛后多人出现抽筋、脱水和低血糖现象，提供普通跑者的补给准备建议。视频指出赛前一周避免突然加量，比赛当天不能空腹，超过60分钟需补充电解质和能量胶，并强调出现头晕等症状时应停止比赛。图文部分区分了不同疲劳程度和补水频率。内容旨在帮助跑者科学准备，减少风险。",
+  "business_use": "可用于内容归档、检索和人工复核",
+  "processing_status": "success",
+  "evidence_used": [
+    "raw_text"
+  ],
+  "missing_evidence": [],
+  "quality_flags": [],
+  "warning_messages": [],
+  "error_message": null,
+  "call_ids": [
+    "file_0014_call_0001"
+  ],
+  "models_used": [
+    {
+      "call_id": "file_0014_call_0001",
+      "task_type": "text_analysis",
+      "provider": "deepseek",
+      "model_name": "deepseek-v4-flash",
+      "status": "success"
+    }
+  ],
+  "processing_cost_cny": 0.00178,
+  "processing_time_ms": 5711
+}

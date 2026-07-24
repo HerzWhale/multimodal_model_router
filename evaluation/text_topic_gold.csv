@@ -1,0 +1,19 @@
+﻿file_name,gold_topic,reviewer_note
+01_news_city_transport.txt,news,核心是暴雨后地铁恢复运营和限流通报 属于公共事件新闻资讯
+02_finance_ai_chip_market.txt,finance_business,虽然出现 AI 芯片和云厂商 但重点是财报 资本开支 订单和投资风险 属于财经商业
+03_ads_phone_campaign.txt,ads_marketing,内容明确说明品牌合作并引导优惠转化 属于广告营销
+04_technology_ai_agent_update.txt,technology,核心是 AI Agent 软件功能 工作流和工具调用日志 属于科技数码
+05_sports_health_home_training.txt,sports_health,核心是久坐人群训练动作 运动风险和健康建议 属于体育健康
+06_entertainment_movie_variety.txt,entertainment,核心是综艺节目 嘉宾互动 舞台花絮和粉丝讨论 属于娱乐休闲
+07_lifestyle_travel_food.txt,lifestyle,核心是个人旅行 美食和周末生活体验 属于生活日常
+08_knowledge_history_science.txt,knowledge,核心是解释古城与河流关系的泛知识内容 没有更强领域归属 属于知识科普
+09_finance_tech_ai_cloud_capex.txt,finance_business,虽然出现 AI 云服务 芯片和推理成本 但核心是云厂商收入结构 竞争策略和利润压力 属于财经商业
+10_ads_disguised_phone_review.txt,ads_marketing,形式像手机测评 但明确品牌合作 购买入口和促销转化 应归入广告营销
+11_news_entertainment_film_festival_incident.txt,news,虽然出现电影节 明星和粉丝讨论 但核心是活动临时取消和官方回应 属于新闻资讯
+12_knowledge_with_soft_ad_nutrition.txt,knowledge,虽然出现产品露出 但主体是解释配料表和控糖知识 属于知识科普
+13_lifestyle_commerce_travel_hotel.txt,lifestyle,虽然出现房型价格和链接 但主体是个人旅行休息体验 属于生活日常
+14_sports_health_public_event_marathon.txt,sports_health,虽然开头像赛事事件 但主体是跑者补给和运动健康建议 属于体育健康
+15_technology_long_local_ai_workflow.txt,technology,核心是本地 AI 工作流的数据格式 任务队列 结构校验和调用安全 属于科技工程内容
+16_entertainment_long_variety_production.txt,entertainment,核心是综艺剪辑 嘉宾互动 节目效果和观众讨论 属于娱乐休闲
+17_other_long_campus_lost_found.txt,other,核心是校内失物认领事务和操作流程 不符合其余八类业务主题
+18_other_long_community_coordination.txt,other,核心是社区共享工具借用与安全登记流程 不符合其余八类业务主题

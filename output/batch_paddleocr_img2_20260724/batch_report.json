@@ -1,0 +1,75 @@
+{
+  "schema_version": "v1",
+  "batch_id": "batch_paddleocr_img2_20260724",
+  "generated_at": "2026-07-24T10:34:35+08:00",
+  "file_stats": {
+    "total_files": 1,
+    "success_files": 1,
+    "partial_success_files": 0,
+    "failed_files": 0,
+    "skipped_files": 0,
+    "success_rate": 1.0,
+    "failure_rate": 0.0,
+    "partial_success_rate": 0.0
+  },
+  "cost_stats": {
+    "budget_limit_cny": 50.0,
+    "total_cost_cny": 0.010222,
+    "avg_cost_per_file_cny": 0.010222,
+    "avg_cost_per_success_file_cny": 0.010222,
+    "cost_by_task_type": {
+      "ocr": 0.0,
+      "text_analysis": 0.000222,
+      "visual_understanding": 0.01
+    },
+    "cost_by_provider": {
+      "deepseek": 0.000222,
+      "paddlepaddle": 0.0,
+      "qwen": 0.01
+    },
+    "budget_used_rate": 0.000204
+  },
+  "latency_stats": {
+    "total_processing_time_ms": 51096.0,
+    "avg_processing_time_per_file_ms": 51096.0,
+    "avg_model_latency_ms": 17032.0,
+    "p95_model_latency_ms": 51096.0,
+    "latency_by_task_type": {
+      "ocr": {
+        "avg_latency_ms": 51096.0,
+        "p95_latency_ms": 51096.0
+      },
+      "text_analysis": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      },
+      "visual_understanding": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      }
+    },
+    "latency_by_provider": {
+      "deepseek": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      },
+      "paddlepaddle": {
+        "avg_latency_ms": 51096.0,
+        "p95_latency_ms": 51096.0
+      },
+      "qwen": {
+        "avg_latency_ms": 0.0,
+        "p95_latency_ms": 0.0
+      }
+    },
+    "slowest_file_id": "file_0003"
+  },
+  "error_quality_stats": {
+    "total_errors": 0,
+    "errors_by_level": {},
+    "errors_by_task_type": {},
+    "top_error_messages": [],
+    "quality_flags_count": {},
+    "partial_success_reasons": {}
+  }
+}

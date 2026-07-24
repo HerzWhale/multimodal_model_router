@@ -25,25 +25,6 @@ from result_writer import (
 )
 
 
-def decode_concatenated_json_objects(content: str) -> list[dict]:
-    """把连续排列的多个 JSON 对象解析成列表。"""
-
-    decoder = json.JSONDecoder()
-    records = []
-    index = 0
-
-    while index < len(content):
-        while index < len(content) and content[index].isspace():
-            index += 1
-        if index >= len(content):
-            break
-
-        record, index = decoder.raw_decode(content, index)
-        records.append(record)
-
-    return records
-
-
 class ResultWriterTest(unittest.TestCase):
     def test_ensure_batch_output_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -63,14 +44,36 @@ class ResultWriterTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = write_jsonl(
                 Path(tmp_dir) / "demo.jsonl",
-                [{"file_id": "file_001"}, {"file_id": "file_002"}],
+                [
+                    {
+                        "file_id": "file_001",
+                        "tags": ["中文标签", "OCR"],
+                        "error_message": None,
+                    },
+                    {
+                        "file_id": "file_002",
+                        "models_used": [{"provider": "deepseek", "status": "success"}],
+                    },
+                ],
             )
             content = path.read_text(encoding="utf-8")
-            records = decode_concatenated_json_objects(content)
+            lines = content.splitlines()
+            records = [json.loads(line) for line in lines]
 
-        self.assertIn('{\n  "file_id"', content)
+        self.assertEqual(len(lines), 2)
         self.assertEqual(len(records), 2)
         self.assertEqual(records[0]["file_id"], "file_001")
+        self.assertEqual(records[0]["tags"], ["中文标签", "OCR"])
+        self.assertIsNone(records[0]["error_message"])
+        self.assertEqual(records[1]["models_used"][0]["provider"], "deepseek")
+
+    def test_write_jsonl_with_no_records_creates_empty_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = write_jsonl(Path(tmp_dir) / "empty.jsonl", [])
+
+            content = path.read_text(encoding="utf-8")
+
+        self.assertEqual(content, "")
 
     def test_write_batch_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
