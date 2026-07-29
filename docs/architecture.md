@@ -30,6 +30,7 @@ src/
   ├─ model_strategy_advisor.py     模型组合策略报告生成
   ├─ model_catalog.py              从调用明细聚合模型目录
   ├─ routing_policy.py             离线路由策略与约束判断
+  ├─ routing_preflight.py          批处理前路由策略预检查
   ├─ strategy_simulator.py         路由策略离线模拟报告生成
   └─ text_topic_evaluator.py       文本主分类评估报告生成
 
@@ -92,17 +93,21 @@ text_topic_evaluator 基于人工标准答案做文本主分类评估
 | `file_loader.py` | 扫描输入目录，生成文件级元数据 | 支持本地文件，不支持云存储 |
 | `preprocessor.py` | 根据文件类型做基础预处理 | 视频关键帧和音频处理仍是占位 |
 | `model_router.py` | 根据任务类型选择供应商和模型 | 当前是固定路由，不是运行时动态推荐 |
-| `model_clients.py` | 封装 mock、本地 PaddleOCR 和 DeepSeek 文本分析 | 已完成两张真实截图推理；复杂页面质量与延迟尚未通过正式评估 |
-| `pipeline_runner.py` | 调度文件流程，记录真实或 mock 调用、证据、成本、延迟和错误 | PaddleOCR 当前只用于图片；视频 OCR 明确保留为 mock |
+| `model_clients.py` | 封装 mock、本地 PaddleOCR 和 DeepSeek 文本分析 | 已完成五张正式图片本地推理与分段评估；关键帧批次级OCR闸门仍未通过 |
+| `pipeline_runner.py` | 调度文件流程，记录真实或 mock 调用、证据、成本、延迟、错误和质量风险 | PaddleOCR 当前只用于图片；视频 OCR 明确保留为 mock；真实图片OCR会经过低质量文本闸门 |
 | `cost_latency_tracker.py` | 生成模型调用成本和延迟记录 | 成本依赖本地价格配置 |
 | `result_writer.py` | 写入 JSON、标准 JSONL 和 Markdown 输出 | 新 JSONL 每行一条完整记录；历史批次不重写 |
 | `report_generator.py` | 汇总文件、成本、延迟、错误和质量统计 | 当前报告以批次为粒度 |
 | `model_strategy_advisor.py` | 基于既有批次生成模型组合策略报告 | 离线分析，不触发外部 API |
 | `model_catalog.py` | 从调用明细聚合模型目录 | 只基于已有调用记录，不编造未知模型数据 |
 | `routing_policy.py` | 定义成本、延迟、质量和平衡策略 | 离线策略判断，不改变运行时模型调用 |
+| `routing_preflight.py` | 在批处理前读取当前路由、价格、策略约束、可选输入目录和已有模型调用记录，生成运行前风险检查、规模画像、历史延迟画像和受控小样本试跑建议 | 不调用模型，不自动换模型；预算可基于输入规模估算，P95延迟可基于已有 `model_calls.jsonl` 判断；试跑建议只生成命令参考，不会自动执行 |
 | `strategy_simulator.py` | 基于既有批次生成路由策略模拟报告 | 不触发外部 API，不重新跑批处理 |
 | `text_topic_evaluator.py` | 生成文本评估模板并计算 Accuracy、Macro-F1 和分类级指标 | 只评估文本主分类，不评估图片、视频、摘要或标签质量 |
-| `image_ocr_evaluator.py` | 按人工业务文字块计算OCR精确召回率和字符错误率 | 只读取已有图片结果，不运行OCR或外部API；当前正式基准有2张图 |
+| `image_ocr_evaluator.py` | 按人工业务文字块计算OCR精确召回率、字符错误率、错误归因和批次级闸门 | 只读取已有图片结果，不运行OCR或外部API；当前正式基准有5张图 |
+| `image_ocr_preprocessing_experiment.py` | 围绕 `img_9.jpg` 生成最小预处理实验和延迟拆分报告 | 只服务于图片OCR闸门判断，不进入主业务流水线，不新增模型能力 |
+| `ocr_backend_advisor.py` | 基于OCR闸门、延迟拆分和候选评估报告生成后端取舍判断 | 只生成离线建议，不接入RapidOCR、Tesseract或云OCR |
+| `rapidocr_candidate_evaluator.py` | 对 RapidOCR 候选后端执行可选评估 | 当前已用三张关键帧完成本地实测；依赖缺失时仍会安全输出 `dependency_missing`，不编造指标 |
 
 ## 3. 三条处理流程
 
@@ -126,10 +131,14 @@ topic / secondary_topics / tags / summary / business_use
 OCR mock / 本地 PaddleOCR ─┐
 视觉理解 mock ────┤
                   ↓
+          OCR 证据质量闸门
+                  ↓
           DeepSeek 文本分析
                   ↓
 topic / secondary_topics / tags / summary / business_use
 ```
+
+图片流程中的 OCR 证据质量闸门只处理“调用成功但文字明显不可用”的情况。此时 `ocr_text` 仍会保留在输出中，方便人工复核；但该证据不会进入 `evidence_used`，下游文本分析也不会把它当作可靠输入。文件级 `processing_status` 会变为 `partial_success`，并写入 `quality_flags=low_quality_ocr_text` 和对应 `warning_messages`。
 
 ### 视频流程
 
@@ -157,6 +166,10 @@ topic / secondary_topics / tags / summary / business_use
 | `ocr_text` | OCR 提取的文字证据；图片可选择本地 PaddleOCR，视频仍为 mock；无文字时允许为空 |
 | `audio_transcript` | 音频转写文字；当前视频上游为 mock |
 | `visual_description` | 图片或关键帧的视觉描述；当前图片 / 视频上游为 mock |
+| `evidence_used` | 最终分析实际使用的证据列表；低质量 OCR 文本会保留在 `ocr_text`，但不会进入该列表 |
+| `quality_flags` | 机器可读质量风险标签，用于标记用途降级、低质量OCR等可统计问题 |
+| `warning_messages` | 面向使用者的风险提示，用于解释结果可信度受到什么影响 |
+| `processing_status` | 文件级处理状态；低质量OCR会让图片结果从完全成功降为部分成功 |
 | `topic` | 主分类，表示内容最主要的业务归属 |
 | `secondary_topics` | 副分类，表示最多两个交叉领域 |
 | `tags` | 关键词，用于搜索、筛选和素材管理 |
@@ -170,7 +183,7 @@ topic / secondary_topics / tags / summary / business_use
 | 任务类型 | 当前供应商 / 模型 | 真实状态 |
 |---|---|---|
 | 图片 OCR 默认任务 | `doubao / mock-ocr` | mock |
-| 图片 OCR 可选任务 | `paddlepaddle / PP-OCRv5_mobile` | 已完成两张真实截图的本地 CPU 推理 |
+| 图片 OCR 可选任务 | `paddlepaddle / PP-OCRv5_mobile` | 已完成五张正式图片的本地 CPU 推理与分段评估 |
 | 视频 OCR 任务 | `doubao / mock-ocr` | mock |
 | 视觉理解任务 | `qwen / mock-vision` | mock |
 | 语音识别任务 | `doubao / mock-asr` | mock |
@@ -183,6 +196,7 @@ topic / secondary_topics / tags / summary / business_use
 | `model_router.py` | 当前 `task_type` | 当前任务使用的供应商和模型 | 批处理运行时选择模型 |
 | `model_strategy_advisor.py` | 已有 `batch_report.json` 和 `model_calls.jsonl` | 策略报告 | 事后解释成本、延迟、真实 / mock 边界 |
 | `strategy_simulator.py` | 已有批次和策略配置 | 路由策略模拟报告 | 离线比较不同业务目标的取舍 |
+| `routing_preflight.py` | 路由规则、价格表、策略约束、可选输入目录、可选预估用量和历史 `model_calls.jsonl` | 预检查报告 | 运行前判断输入规模、历史P95延迟、路由完整性、预算/P95延迟/真实覆盖率约束，并在失败时给出受控小样本试跑建议 |
 
 字段说明：
 
@@ -194,6 +208,12 @@ topic / secondary_topics / tags / summary / business_use
 | `is_mock` | 是否为 mock 调用，用于区分真实证据和占位流程 |
 | `policy_name` | 离线路由策略名称，用于区分成本优先、延迟优先、质量优先和平衡策略 |
 | `constraint_status` | 约束满足状态，用于判断当前批次是否符合策略目标 |
+| `preflight_status` | 运行前预检查状态，用于区分当前配置是可继续、存在风险还是不建议直接运行 |
+| `workload_profile` | 运行前规模画像，用于统计输入文件数量、媒体类型分布和预估任务用量 |
+| `expected_units_by_task` | 每种任务的预估计量单位，用于把单位价格转换为运行前预算估算 |
+| `latency_profile` | 历史延迟画像，用于从已有模型调用记录中汇总任务级平均延迟、P95延迟和最大延迟 |
+| `historical_p95_latency_by_task_ms` | 按任务类型整理的历史P95延迟，用于把已有运行经验带入运行前延迟预检查 |
+| `controlled_trial_plan` | 受控小样本试跑建议，用于在预算通过但延迟失败时，说明下一轮应缩到哪些文件、哪些后端可以单独试、哪些真实调用需要授权 |
 
 ## 5. 成本与延迟追踪逻辑
 
@@ -237,8 +257,16 @@ output/{batch_id}/
 | `batch_report.json` | 保存批次级统计报告 |
 | `model_strategy_report.md` / `model_strategy_report.json` | 保存模型组合策略分析 |
 | `routing_policy_simulation.md` / `routing_policy_simulation.json` | 保存离线路由策略模拟结果 |
+| `routing_preflight_report.md` / `routing_preflight_report.json` | 保存批处理前的输入规模画像、历史延迟画像、路由完整性、预算、P95延迟、真实覆盖率和mock边界检查 |
 | `text_topic_eval_template.csv` | 保存文本主分类人工评估模板 |
 | `text_topic_eval_report.md` / `text_topic_eval_report.json` | 保存文本主分类评估报告 |
+| `image_ocr_eval_summary.md` / `image_ocr_eval_summary.json` | 保存图片OCR分段质量汇总，包括完整段落召回率、字符错误率和OCR延迟 |
+| `image_ocr_error_analysis_img_9.md` / `image_ocr_error_analysis_img_9.json` | 保存 `img_9.jpg` 的OCR错误归因和单图闸门判断 |
+| `image_ocr_gate_report_keyframes.md` / `image_ocr_gate_report_keyframes.json` | 保存三张关键帧图片的批次级OCR闸门判断 |
+| `image_ocr_preprocess_experiment_img_9.md` / `image_ocr_preprocess_experiment_img_9.json` | 保存 `img_9.jpg` 的预处理变体实验结果 |
+| `image_ocr_latency_profile_img_9.md` / `image_ocr_latency_profile_img_9.json` | 保存 `img_9.jpg` 的OCR延迟拆分结果，区分引擎创建、解码、模型推理和解析耗时 |
+| `ocr_backend_advice.md` / `ocr_backend_advice.json` | 保存OCR后端取舍判断，用于决定是否继续本地OCR路线，或在用户授权后评估服务化OCR |
+| `rapidocr_candidate_eval.md` / `rapidocr_candidate_eval.json` | 保存RapidOCR候选评估结果；当前已完成三张关键帧本地实测，闸门结论为未通过 |
 | `failure_demo_interpretation.md` | 保存失败 / 部分成功演示解读 |
 
 写入层把机器输出和人工输出分开：三个 `.jsonl` 文件遵循标准 JSONL，便于流式读取和导入；`results_readable.md` 负责分段、换行和解释。读取层保留对历史缩进式连续 JSON 对象的兼容，但不会批量改写已有输出。
@@ -258,7 +286,7 @@ batch_id：一次批处理
 | `batch_id` | 批次唯一标识，用来聚合同一次处理中的文件和调用记录 |
 | `file_id` | 文件唯一标识，用来关联文件结果、模型调用和错误记录 |
 | `call_ids` | 文件级结果关联的多个模型调用 ID，用来从结果反查调用链 |
-| `processing_status` | 文件级处理状态，用来判断成功、失败、部分成功或跳过 |
+| `processing_status` | 文件级处理状态，用来判断成功、失败、部分成功或跳过；低质量OCR会使文件进入部分成功 |
 | `error_message` | 技术错误信息，用于开发者排查失败原因 |
 | `warning_messages` | 面向使用者的风险提示，用于解释结果可信度受到什么影响 |
 
@@ -348,11 +376,16 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 
 - 真实模型证据覆盖 DeepSeek 文本分析和 PaddleOCR 图片文字提取；PaddleOCR已完成五张正式图片、共151段人工业务文字评估，但样本量仍不足以外推生产质量。
 - 图片 OCR 默认仍为 mock，显式选择后才使用本地 PaddleOCR；视频 OCR、视觉理解和语音识别是 mock，不能代表真实图片或视频理解质量。
-- 图片最终分析仍同时使用真实 `ocr_text` 和 mock `visual_description`，不能把文件级结构化结果解释为完整真实图片理解。
+- 图片最终分析可能同时使用真实 `ocr_text` 和 mock `visual_description`；当 `ocr_text` 被低质量闸门判为不可用时，下游文本分析会忽略该OCR证据，但仍会保留原始OCR文字供复核。因此不能把文件级结构化结果解释为完整真实图片理解。
 - Paddle 底层推理器对中文路径仍不稳定；本轮直接使用 H 盘中文路径时模型创建失败，改用临时英文盘符映射和 `PADDLE_PDX_CACHE_HOME` 后成功运行。代码尚未自动处理该环境问题。
 - 当前本地 CPU 实测中，`img_1.png` 的 OCR 调用耗时15733ms；`img_2.png` 独立冷启动批次耗时51096ms；三张关键帧图片的 OCR 平均延迟为18006ms、P95延迟为28261ms。当前 OCR 延迟仍高于既定图片2秒目标，且本地资源成本也未计量。
+- 已生成关键帧 OCR 批次级闸门报告：三张关键帧图片整体完整段落召回率78.05%、字符错误率11.01%、P95延迟28261ms，结论为未通过；其中 `img_9.jpg` 是主要质量阻塞样本，三张图都存在延迟阻塞。
+- 已完成 `img_9.jpg` OCR 预处理最小实验：整图放大2倍和左右分区放大2倍均只带来轻微召回提升，字符错误率没有下降，延迟显著高于目标，因此该预处理方向不能直接进入主流程。
+- 已完成 `img_9.jpg` OCR 延迟拆分：引擎创建8834ms，首次模型推理60373ms，热启动第二次模型推理56042ms；图片解码15ms/10ms、结果解析0ms，说明当前瓶颈主要在本地CPU模型推理。
+- 已完成RapidOCR候选实测：三张关键帧整体完整段落召回率82.93%、字符错误率10.64%、P95延迟4294ms，虽然明显快于当前PaddleOCR CPU批次，但仍未达到当前质量和2秒P95延迟闸门。
+- 已更新OCR后端取舍判断：RapidOCR已标记为 `evaluated_not_passed`，不接入主流程；如果继续追求生产可用OCR，下一步只能在用户授权后小样本评估服务化OCR，否则保留PaddleOCR作为当前本地基线。
 - 视频预处理仍是占位，尚未进行真实关键帧抽取和音频转写。
-- 运行时模型路由是固定规则，尚未根据预算、质量要求、延迟目标动态选择模型。
+- 运行时模型路由是固定规则，尚未根据预算、质量要求、延迟目标动态选择模型；路由策略预检查可以基于输入目录生成运行前规模画像，基于历史 `model_calls.jsonl` 生成任务级P95延迟画像，并在延迟失败时给出受控小样本试跑建议，但不会自动调整模型组合或自动执行试跑命令。
 - 决策层报告和路由策略模拟基于已有批次数据生成，不能替代真实多供应商 live test。
 - 历史14条受控结果存在标签泄漏，只能证明工程链路；清理后的18条样本修改前基线为77.78% Accuracy和73.70% Macro-F1。
 - 九类规则回归批次端到端Accuracy为94.44%、有效预测Accuracy为100.00%、预测覆盖率为94.44%、Macro-F1为96.30%；原4条错例均已修复，但历史批次有1条响应解析失败。
@@ -368,11 +401,23 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 | 已完成 | 明确图片 OCR 评估口径 | 只统计账号名称、简介、作品标题和作品说明等业务内容文字 |
 | 已完成 | 扩充图片 OCR 评估小集 | 当前有5张正式样本、151段人工业务文字，其中3张来自真实视频关键帧信息图 |
 | 已完成 | 建立图片 OCR 评估器 | 分段计算精确召回率和字符错误率，避免多栏阅读顺序污染指标 |
-| 已完成 | 受控执行 PaddleOCR 真实图片 | 三张图片均成功处理，已验证权重下载、响应、文字提取和调用记录 |
+| 已完成 | 受控执行 PaddleOCR 真实图片 | 五张正式图片均已处理；其中关键帧三图验证了结果解析、延迟和调用记录链路 |
 | 已完成 | 增加指定文件筛选 | 使用 `--include-files` 只处理目标文件，避免误跑整个输入目录 |
+| 已完成 | 分析 OCR 弱样本与延迟瓶颈 | `img_9.jpg` 错误集中在小字号结构图模块、Buffer 和 TLB 指标，且28261ms延迟不达标 |
+| 已完成 | 生成关键帧 OCR 批次级闸门报告 | 把单图错误归因升级为批次级是否进入下一功能的判断，结论为未通过 |
+| 已完成 | 执行 `img_9.jpg` 预处理最小实验 | 整图放大和左右分区放大无法通过质量与延迟闸门 |
+| 已完成 | 拆分 OCR 延迟来源 | 已确认 `img_9.jpg` 慢在本地CPU模型推理，不是图片解码或结果解析 |
+| 已完成 | 生成 OCR 后端取舍判断 | 基于PaddleOCR证据和RapidOCR实测结果，明确RapidOCR不接入主流程，服务化OCR需要单独授权 |
+| 已完成 | 准备 RapidOCR 候选评估器 | 依赖未安装时安全输出 `dependency_missing`，依赖安装后可复用同一批图片和人工基准 |
+| 已完成 | 真实评估 RapidOCR 候选 | 三张关键帧同批样本已跑通，本地0元外部API成本，但质量和延迟闸门未通过 |
+| 已完成 | 增加路由策略预检查 | 在批处理前检查当前路由完整性、预算、P95延迟、真实模型覆盖率和mock边界 |
+| 已完成 | 补运行前规模画像 | 已基于输入目录统计预计文件数、图片数、视频数、音频秒数和token用量；预算可运行前估算 |
+| 已完成 | 补历史 P95 延迟输入 | 已从已有 `model_calls.jsonl` 汇总任务级历史P95；当前预检查因OCR历史P95延迟超过目标而失败 |
+| 已完成 | 补受控小样本试跑建议 | 预算通过但延迟失败时，报告会建议小批量、拆后端、暂不纳入视频，避免直接扩大运行 |
+| 已完成 | 补低质量OCR结果闸门 | PaddleOCR调用成功但文字疑似乱码时，文件级结果会进入 `partial_success` 并写入质量风险，不再被简单当作完全成功 |
 | P0 | 保留重试计量回归 | 后续改动继续保证每次尝试独立记录成本、延迟和状态 |
 | P1 | 把故障注入接入受保护演示命令 | 让失败 / 部分成功样例更容易复现，同时避免默认流程误触发 |
-| P0 | 分析 OCR 弱样本与延迟瓶颈 | `img_9.jpg` 完整段落召回率只有47.62%，P95延迟28261ms，需要先解释瓶颈 |
+| P1 | 判断是否授权服务化OCR小样本评估 | RapidOCR已实测未过闸门；如果继续追求生产可用OCR，需要先确认外部API、成本和数据风险 |
 | P2 | 后续整理展示材料 | 等核心能力更扎实后再考虑是否补充图示、可视说明和对外说明 |
 
 ## 10. 相关文档

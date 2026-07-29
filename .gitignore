@@ -43,6 +43,9 @@ progress.md
 htmlcov/
 .ipynb_checkpoints/
 
+# 本地 PaddleOCR 模型权重缓存
+.paddle_cache/
+
 # 构建产物
 build/
 dist/
@@ -82,3 +85,9 @@ output/*
 !output/batch_paddleocr_keyframes_20260724/**
 !output/batch_paddleocr_keyframes_20260724_retry/
 !output/batch_paddleocr_keyframes_20260724_retry/**
+output/batch_paddleocr_keyframes_20260724_retry/image_ocr_preprocess_experiment_img_9/
+output/batch_paddleocr_keyframes_20260724_retry/image_ocr_preprocess_experiment_img_9/**
+!output/batch_controlled_paddleocr_gate_20260729/
+!output/batch_controlled_paddleocr_gate_20260729/**
+!output/routing_preflight_current/
+!output/routing_preflight_current/**

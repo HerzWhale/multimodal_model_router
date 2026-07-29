@@ -14,16 +14,17 @@
 - 成本、延迟、结果写入和批次报告能按预期生成。
 - 决策层能基于已有批次数据生成成本、延迟、真实/mock 边界和模型组合建议。
 - 路由策略模拟能基于已有批次检查预算、延迟、真实覆盖率等约束。
+- 路由策略预检查能在批处理前检查输入规模画像、历史延迟画像、路由完整性、预算约束、P95延迟约束、真实模型覆盖率和mock边界。
 - 文本主分类评估能生成评估模板、合并人工标准答案，并计算 Accuracy、Macro-F1 和分类级指标。
 - 主入口能在临时目录中跑通一次 mock 批处理。
 - 默认运行保持离线；PaddleOCR 单元测试使用替代引擎，不下载权重，DeepSeek 真实调用必须经过显式授权。
 
 ## 2. 当前已有测试数量
 
-当前测试目录共有 14 个测试文件。最近一次离线运行结果为：
+当前测试目录共有 18 个测试文件。最近一次离线运行结果为：
 
 ```text
-Ran 133 tests
+Ran 177 tests
 
 OK
 ```
@@ -45,14 +46,18 @@ python -m unittest discover -s tests
 | `test_model_router.py` | `model_router.py` | 路由规则读取、按任务类型选择模型、未知任务报错 |
 | `test_model_clients.py` | `model_clients.py` | mock客户端、PaddleOCR结果解析、无文字和推理失败处理、DeepSeek结构化响应和有限重试 |
 | `test_cost_latency_tracker.py` | `cost_latency_tracker.py` | 模型价格读取、按输入输出用量计算成本、模型调用记录生成 |
-| `test_pipeline_runner.py` | `pipeline_runner.py` | 三条文件级流水线、图片本地 OCR 选择、调用记录、无文字结果、OCR失败部分成功，以及视频仍为mock的边界 |
+| `test_pipeline_runner.py` | `pipeline_runner.py` | 三条文件级流水线、图片本地 OCR 选择、调用记录、无文字结果、OCR失败部分成功、低质量OCR闸门，以及视频仍为mock的边界 |
 | `test_result_writer.py` | `result_writer.py` | JSON、标准单行 JSONL、空记录文件、Markdown、人类可读结果、模型调用明细和错误文件写入 |
 | `test_report_generator.py` | `report_generator.py` | 批次成本、延迟、成功率和错误统计；同时验证标准 JSONL 与历史缩进式连续 JSON 对象可读取 |
 | `test_model_strategy_advisor.py` | `model_strategy_advisor.py` | 成本汇总、延迟瓶颈识别、真实/mock 边界识别、字段缺失稳健处理、JSON 和 Markdown 报告生成 |
 | `test_routing_policy.py` | `model_catalog.py` / `routing_policy.py` | 模型目录聚合、策略约束判断、真实/mock 覆盖率、预算扩展模拟和配置读取 |
+| `test_routing_preflight.py` | `routing_preflight.py` | 运行前输入规模画像、历史延迟画像、指定文件过滤、路由完整性检查、显式后端覆盖、预算约束、P95延迟约束、受控小样本试跑建议、mock与真实模型边界、缺价格稳健处理、JSON和Markdown报告写出 |
 | `test_strategy_simulator.py` | `strategy_simulator.py` | 基于已有批次生成路由策略模拟 JSON/Markdown 报告，验证缺字段时不会硬算 |
 | `test_text_topic_evaluator.py` | `text_topic_evaluator.py` / `evaluation/` | 端到端 Accuracy、有效预测 Accuracy、预测覆盖率、Macro-F1、分类级指标、缺失/非法预测分离、缺标签、报告写入、18条样本一致性、标签泄漏、长样本长度和人工答案CSV的Excel编码兼容性 |
-| `test_image_ocr_evaluator.py` | `image_ocr_evaluator.py` / `evaluation/image_ocr_gold.csv` | 文字规范化、重复文字块不可重复占用、同一OCR行内多个非重叠文字块、最佳连续片段、字符编辑距离、可选文字排除、基准字段校验和JSON报告生成 |
+| `test_image_ocr_evaluator.py` | `image_ocr_evaluator.py` / `evaluation/image_ocr_gold.csv` | 文字规范化、重复文字块不可重复占用、同一OCR行内多个非重叠文字块、最佳连续片段、字符编辑距离、可选文字排除、基准字段校验、JSON报告生成、单图错误归因、批次级闸门判断和报告写出 |
+| `test_image_ocr_preprocessing_experiment.py` | `image_ocr_preprocessing_experiment.py` | 预处理图片生成、变体评估、基线对比、实验结论、OCR延迟拆分和JSON/Markdown报告写出；测试使用假OCR引擎，不运行真实PaddleOCR |
+| `test_ocr_backend_advisor.py` | `ocr_backend_advisor.py` | OCR后端候选排序、PaddleOCR不过闸门时的替代方案建议、RapidOCR已评估未通过时不重复推荐、隐私约束、缺失字段稳健处理、JSON/Markdown报告写出 |
+| `test_rapidocr_candidate_evaluator.py` | `rapidocr_candidate_evaluator.py` | RapidOCR候选依赖检查、依赖缺失安全跳过、假OCR客户端评估、常见返回结构解析、JSON/Markdown报告写出 |
 | `test_main.py` | `main.py` | mock批处理、JSONL逐行解析、评估输入隔离、指定文件筛选、PaddleOCR依赖预检、DeepSeek安全闸门，以及未显式选择的另一后端强制保持mock |
 
 ## 4. 关键字段与测试作用
@@ -69,13 +74,21 @@ python -m unittest discover -s tests
 | `latency_ms` | 单次模型调用延迟，单位毫秒，用于性能分析 | 已测试调用记录和报告会保留延迟 |
 | `processing_status` | 文件级处理状态，用来判断成功、部分成功、失败或跳过 | 已测试报告可统计成功、部分成功和失败状态 |
 | `business_use` | 业务用途说明，用来解释结果可以支持什么业务动作 | 已测试无商业证据的推广、广告或转化建议会降级，明确商业证据和普通用途不会被误改 |
-| `quality_flags` | 机器可读的质量风险标签，用来批量筛选和追溯质量事件 | 已测试用途降级会记录 `business_use_grounded_fallback`，同时文件仍保持成功状态 |
+| `quality_flags` | 机器可读的质量风险标签，用来批量筛选和追溯质量事件 | 已测试用途降级会记录 `business_use_grounded_fallback`；低质量OCR会记录 `low_quality_ocr_text` 并使文件进入部分成功 |
 | `model_call_count` | 模型调用次数，用来衡量本批次实际触发了多少次模型任务 | 已测试策略报告会基于模型调用明细计算调用次数 |
 | `is_mock` | 是否为 mock 调用，用来区分真实模型调用和占位调用 | 已测试策略报告能识别真实 DeepSeek 调用与 mock 上游调用 |
 | `cost_share` | 成本占比，用来判断某个任务或模型是否是主要成本来源 | 已测试策略报告会计算任务和模型维度的成本占比 |
 | `policy_name` | 路由策略名称，用来区分成本优先、延迟优先、质量优先和平衡策略 | 已测试不同策略会生成不同约束判断和建议 |
 | `constraint_status` | 策略约束满足状态，用来判断当前批次是否符合某类业务目标 | 已测试通过、失败和部分未知状态 |
 | `real_coverage_rate` | 真实模型调用占全部模型调用的比例，用来衡量真实 API 证据覆盖程度 | 已测试真实调用和 mock 调用能被区分并计算比例 |
+| `preflight_status` | 运行前预检查总状态，用来判断当前路由配置是否可以继续受控试跑 | 已测试 pass/warning/fail 相关路径中的 warning 和 fail |
+| `workload_profile` | 运行前规模画像，用于统计输入文件数、媒体类型分布和预计任务单位 | 已测试能从输入目录生成画像，并按指定文件过滤范围 |
+| `latency_profile` | 历史延迟画像，用于从已有模型调用记录中汇总任务级平均延迟、P95延迟和最大延迟 | 已测试能从 `model_calls.jsonl` 生成画像，并识别mock延迟边界 |
+| `expected_units_by_task` | 各任务的预估计量单位，用来把单位价格转换成整批预算估算 | 已测试完整用量可计算总成本，视频缺少音频秒数时不会硬算语音识别成本 |
+| `historical_p95_latency_by_task_ms` | 按任务类型整理的历史P95延迟，用于把已有运行经验带入运行前延迟预检查 | 已测试可触发延迟约束失败 |
+| `budget_limit_cny` | 预算上限，用来判断预估用量下的模型组合是否可能超预算 | 已测试提供预估用量时能计算成本并触发预算失败 |
+| `p95_latency_limit_ms` | P95延迟限制，用来判断高分位延迟是否超过业务目标 | 已测试提供历史P95延迟时能触发延迟失败 |
+| `min_real_coverage_rate` | 最低真实模型覆盖率，用来约束mock任务占比不能过高 | 已测试全mock路由会触发真实覆盖率失败 |
 | `predicted_topic` | 模型预测的文本主分类，用来和人工答案对比 | 已测试能从结果文件中提取并写入评估模板 |
 | `gold_topic` | 人工标注的正确主分类，是计算准确率的基准 | 已测试能从人工标准答案表读取和合并 |
 | `accuracy` | 文本主分类准确率，计算方式为 `correct_count / evaluated_count` | 已测试正确样本数、缺标签样本和准确率计算 |
@@ -92,6 +105,21 @@ python -m unittest discover -s tests
 | `segment_id` | 图片内文字块的唯一编号，用于逐段关联人工正确文本和OCR结果 | 已测试同图重复编号会被拒绝 |
 | `exact_segment_recall` | 完整识别的必选业务文字块占比 | 已测试重复文字必须匹配不同OCR行 |
 | `character_error_rate` | 分段编辑距离总和除以人工正确字符总数 | 已测试缺字、相邻噪声和可选文字排除 |
+| `error_bucket` | OCR错误归因类型，用来区分标签丢失、数值丢失、片段截断或字符替换 | 已测试错误类型聚合和报告写入 |
+| `error_by_segment_type` | 按人工文字块类型汇总错误，用来判断问题集中在哪类内容 | 已测试能按文字块类型聚合错误段和编辑距离 |
+| `gate_decision` | 基于当前MVP阈值生成的OCR功能闸门判断，用来决定是否继续留在当前功能内 | 已测试低召回、高错误率和高延迟会阻止进入下个功能，并能生成批次级报告 |
+| `variant_name` | OCR预处理方案名称，用来区分整图放大、分区放大等实验输入 | 已测试不同变体会分别生成图片并独立评估 |
+| `decision` | OCR预处理实验结论，用来判断该预处理方向是否值得继续 | 已测试变体优于基线、通过闸门和未通过闸门的判断逻辑 |
+| `engine_create_ms` | 本地OCR引擎创建耗时，用来观察模型加载和初始化开销 | 已测试延迟拆分报告会记录引擎创建耗时 |
+| `decode_ms` | 图片读取和解码耗时，用来判断是否慢在文件读取或图像解码 | 已测试每次OCR尝试都会记录解码耗时 |
+| `predict_ms` | OCR模型推理耗时，用来判断核心瓶颈是否在模型识别 | 已测试延迟拆分会识别主要耗时阶段 |
+| `parse_ms` | PaddleOCR结果解析耗时，用来判断后处理是否形成明显开销 | 已测试每次OCR尝试都会记录解析耗时 |
+| `attempt_total_ms` | 单次图片解码、模型推理和结果解析的合计耗时，不包含引擎创建 | 已测试报告会生成单次合计耗时和Markdown表格 |
+| `backend_id` | OCR候选后端的唯一标识，用来区分当前后端和待评估后端 | 已测试候选目录能区分当前PaddleOCR、RapidOCR、Tesseract和云OCR |
+| `dependency` | 本地依赖状态，用来判断候选OCR本轮能否真实运行 | 已测试依赖缺失时会输出 `dependency_missing`，不会编造质量和延迟指标；当前真实RapidOCR报告显示依赖可用 |
+| `switch_signal` | 是否需要从当前PaddleOCR转向替代方案评估的判断信号 | 已测试PaddleOCR质量和延迟不过闸门时会生成替代评估信号 |
+| `evaluation_order` | 下一步建议评估的OCR候选顺序，只表示测试优先级，不表示已接入 | 已测试隐私约束会把云OCR放到本地候选之后，也已测试RapidOCR未通过后不会被重复推荐 |
+| `candidate_evaluations` | 候选OCR后端的已评估结果摘要，用来避免重复推荐已经实测未通过的后端 | 已测试RapidOCR候选报告可被OCR后端建议器读取，并更新候选状态 |
 | `text_analysis_backend` | 文本分析后端配置，用来决定使用 mock 还是 DeepSeek | 已测试默认值为 mock，且 DeepSeek 未授权时会被拒绝 |
 | `--allow-live-api` | DeepSeek API 调用授权开关，用来防止误触发外部请求和费用 | 已测试必须与显式 DeepSeek 后端同时使用 |
 | `--max-api-retries` | 可重试错误的最大重试次数；默认0，显式设为1才允许一次重试 | 已测试不能超过1，也不能用于mock后端 |
@@ -101,10 +129,15 @@ python -m unittest discover -s tests
 当前测试仍有以下缺口：
 
 - 已实现真实 API 调用安全闸门、响应错误分类和显式单次重试。原失败样本已完成一次真实定向验证并在首次请求成功；真实重试分支没有被自然触发，仍由离线故障测试覆盖。
+- 路由策略预检查已经能识别配置风险，并可基于输入目录生成运行前规模画像和预算估算，也可从已有 `model_calls.jsonl` 生成任务级历史P95延迟画像；但这些历史延迟来自既有小样本批次，不能等同于下一批真实生产延迟。
 - PaddlePaddle 3.3.0 和 PaddleOCR 已安装在项目虚拟环境，五张正式图片已完成本地 CPU 推理与分段评估；但仍未系统测量CPU、内存和批量吞吐。
 - `img_1.png` 的真实 OCR 调用耗时15733ms；`img_2.png` 独立冷启动批次耗时51096ms；三张关键帧图片的 OCR 平均延迟为18006ms、P95延迟为28261ms。当前仍未满足既定图片2秒目标。
 - Windows中文路径和默认oneDNN分别触发过模型加载与运行时兼容问题；代码已关闭MKLDNN并支持中文输入图片路径，但 Paddle 底层推理器对中文模型缓存路径仍不稳定。本轮通过临时英文盘符映射和 `PADDLE_PDX_CACHE_HOME` 成功运行，代码尚未自动处理该环境问题。
-- 本轮三张关键帧图片整体完整段落召回率为78.05%、字符错误率为11.01%；其中 `img_9.jpg` 完整段落召回率只有47.62%，说明复杂图表、密集文字或小字号仍是质量瓶颈。
+- 本轮三张关键帧图片整体完整段落召回率为78.05%、字符错误率为11.01%；其中 `img_9.jpg` 完整段落召回率只有47.62%。错误归因显示问题主要集中在小字号结构图中的 `pipeline_module`、`buffer_size` 和 `tlb_size`。批次级闸门报告进一步确认：质量阻塞集中在 `img_9.jpg`，延迟阻塞覆盖三张关键帧图片。
+- `img_9.jpg` 已完成一次真实PaddleOCR预处理最小实验。整图放大2倍和左右分区放大2倍均成功运行，但只带来轻微召回提升，字符错误率未下降，延迟更高；因此不能把预处理写成已解决方案。
+- `img_9.jpg` 已完成一次真实PaddleOCR延迟拆分。引擎创建8834ms，首次模型推理60373ms，热启动第二次模型推理56042ms；图片解码和结果解析不是主要瓶颈。该结果说明本地CPU单图OCR延迟边界仍未达标，但不代表GPU或服务化OCR一定同样慢。
+- 已新增OCR后端取舍判断测试。该测试只验证基于已有证据和候选评估报告生成候选排序和边界说明，不会安装RapidOCR、Tesseract，也不会调用云OCR。
+- RapidOCR候选评估器已经实现并完成一次本地真实对照：三张关键帧整体完整段落召回率82.93%、字符错误率10.64%、P95延迟4294ms，外部API成本0元；默认离线测试仍使用假OCR客户端，不会真实运行RapidOCR。
 - 没有真实视频 OCR、视觉理解和语音识别测试，这些上游能力仍是 mock 或占位。
 - 没有大批量 500 文件压力测试，因此还不能证明大规模处理性能。
 - 已有离线失败 / 部分成功演示批次；但还没有真实供应商故障样例，因此不能把该批次解释为真实故障率。
@@ -146,8 +179,17 @@ PaddleOCR 不使用 API Key。它必须显式选择 `paddleocr` 后端；程序�
 | P1 | 把故障注入接入受保护演示命令 | 离线集成测试 | 让失败和部分成功样例更容易复现，同时避免默认流程误触发 |
 | P0 | 增加 `.gitignore` 和 Demo 文件保留检查 | 手动检查 / 版本管理检查 | 避免纳入缓存、密钥或误删保留证据批次 |
 | P0 | 增加策略报告回归样例 | 离线测试 | 保证 `model_strategy_report.md` 和 `model_strategy_report.json` 的关键结论不随意漂移 |
+| 已完成 | 增加路由策略预检查测试 | 离线单元测试 | 保证运行前能检查路由完整性、预算、P95延迟、真实覆盖率和mock边界 |
 | P1 | 增加 DeepSeek live test 开关 | 受保护 live test | 手动验证真实 API 响应结构、成本和延迟记录 |
 | P1 | 增加更大样本批处理测试 | 离线集成测试 | 验证批量处理、报告生成和性能边界 |
 | P2 | 增加自动化 CI | CI 测试 | 让离线测试成为版本提交前门禁 |
-| P0 | 分析图片 OCR 弱样本与延迟瓶颈 | 受控本地模型测试 / 离线报告复核 | 基于5张正式样本判断 `img_9.jpg` 低召回和P95延迟来源 |
+| 已完成 | 分析图片 OCR 弱样本与延迟瓶颈 | 离线报告复核 | 已基于 `img_9.jpg` 生成错误归因和闸门判断 |
+| 已完成 | 生成关键帧 OCR 批次级闸门报告 | 离线报告复核 | 已基于现有评估汇总和错误归因，判断当前批次是否可以进入下一功能 |
+| 已完成 | 评估是否做 OCR 预处理实验 | 受控本地模型测试 / 离线报告复核 | 已完成整图放大和左右分区放大实验；方向有轻微收益但未过闸门 |
+| 已完成 | 拆分 OCR 延迟来源 | 受控本地模型测试 / 离线报告复核 | 已区分引擎创建、图片解码、模型推理和结果解析；确认当前主要慢在本地CPU模型推理 |
+| 已完成 | 做 OCR 方案取舍判断 | 离线报告复核 | 已基于PaddleOCR证据和RapidOCR实测结果，明确RapidOCR不接入主流程，服务化OCR需要单独授权 |
+| 已完成 | 准备 RapidOCR 候选评估器 | 离线单元测试 / 依赖缺失报告 | 依赖缺失时明确跳过，依赖安装后可复用同一批图片和人工基准 |
+| 已完成 | 安装并真实评估 RapidOCR 候选 | 受控本地模型测试 / 离线报告复核 | 三张关键帧同批样本已跑通，本地0元外部API成本，但质量和延迟闸门未通过 |
+| 已完成 | 补低质量OCR结果闸门 | 离线单元测试 / 受控批次复核 | 已验证明显碎片化OCR文本会写入 `quality_flags` 和 `warning_messages`，且不会进入下游文本分析证据；受控批次保存在 `output/batch_controlled_paddleocr_gate_20260729/` |
+| P0 | 判断是否授权服务化OCR小样本评估 | 受保护 live test / 离线报告复核 | RapidOCR已实测未过闸门；如继续追求生产可用OCR，需要先确认API Key、费用、网络和数据风险 |
 | P2 | 增加真实视觉理解模型测试 | 受保护 live test | 等图片 OCR 功能通过闸门后再评估 |

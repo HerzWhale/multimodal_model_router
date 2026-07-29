@@ -191,6 +191,60 @@ output/batch_20260718_150348/routing_policy_simulation.json
 | `mock_model_calls` | mock 调用汇总，用来说明当前批次哪些部分只能证明流程跑通 |
 | `missing_data_notes` | 数据缺失说明，用来提示某些报告字段无法从现有批次中取得 |
 
+### 6.1 路由策略预检查怎么读
+
+路由策略预检查用于批处理开始前，不读取业务结果，也不调用任何模型。它回答的是“当前配置能不能进入受控试跑”，不是“模型质量好不好”。
+
+当前预检查输出位于：
+
+```text
+output/routing_preflight_current/routing_preflight_report.md
+output/routing_preflight_current/routing_preflight_report.json
+```
+
+复现命令：
+
+```powershell
+python .\src\routing_preflight.py --input-dir .\input --ocr-backend paddleocr --text-analysis-backend deepseek --budget-limit-cny 50 --expected-audio-seconds-per-video 60 --historical-model-calls ".\output\batch_20260718_150348\model_calls.jsonl,.\output\batch_paddleocr_keyframes_20260724_retry\model_calls.jsonl,.\output\batch_text_eval_20260722_135443\model_calls.jsonl" --output-dir .\output\routing_preflight_current
+```
+
+本次预检查基于默认输入目录、显式选择的 PaddleOCR 图片OCR后端、DeepSeek 文本分析后端和三个已有历史调用批次生成。它只读取本地文件清单、配置和历史 `model_calls.jsonl`，不触发 PaddleOCR 推理，不触发 DeepSeek API，也不产生新的费用。
+
+当前结果应这样解读：
+
+- `preflight_status` 为 `fail`，表示当前不建议直接扩大运行；
+- `workload_profile` 显示本次纳入12个输入样本：1个文本、10张图片、1个视频；
+- `latency_profile` 从已有历史调用记录中提取任务级延迟：OCR P95 为28261ms，文本分析 P95 为7112ms；
+- `current_route` 显示 OCR、文本分析和汇总任务是非mock路线，视觉理解和语音识别仍是mock；
+- `real_coverage_rate` 为 60%，表示5类预期任务中有3类走非mock路线；
+- `expected_units_by_task` 基于运行前假设生成：OCR 13张图、视觉理解13帧、语音识别60秒、文本分析输入3989 token和输出3600 token；
+- `budget_limit_cny` 本次显式设为50元，按本地价格表估算总成本为0.171279元，因此预算检查通过；
+- `p95_latency_limit_ms` 在 balanced 策略中为3500ms；当前最大任务级历史P95为28261ms，因此延迟检查失败；
+- `blocking_reasons` 指出阻塞项是 `p95_latency_limit_ms` 未满足；
+- `warning_messages` 会提示视觉理解和语音识别仍是mock，不能解释为完整真实多模态能力；
+- `controlled_trial_plan` 给出下一轮受控小样本建议：最多3个文件，暂不纳入视频，建议使用 `--include-files ai_content_sample.txt,img.png,img_1.png`；先跑纯 mock，再单独跑本地 PaddleOCR，DeepSeek 文本试跑必须另行授权。
+
+因此，本报告的结论不是“完全不能继续”，而是：当前50元预算没有问题，但延迟约束失败；下一轮应继续小批量、受控范围跑，不能直接扩大到完整输入目录。
+
+字段说明：
+
+| 字段 | 含义与作用 |
+|---|---|
+| `preflight_status` | 运行前预检查总状态，用来判断当前配置是可继续、存在风险还是不建议直接运行 |
+| `workload_profile` | 运行前规模画像，用来统计输入文件数量、媒体类型分布和预估任务单位 |
+| `latency_profile` | 历史延迟画像，用来从已有调用记录中汇总任务级平均延迟、P95延迟和最大延迟 |
+| `expected_units_by_task` | 各任务的预估计量单位，用来把单位价格转换成整批预算估算 |
+| `historical_p95_latency_by_task_ms` | 各任务的历史P95延迟，用来判断运行前延迟约束是否可能失败 |
+| `current_route` | 当前每个任务类型对应的供应商和模型，用来核对批处理真正会走哪条模型路线 |
+| `budget_limit_cny` | 预算上限，用来判断预估用量下的模型组合是否可能超预算 |
+| `p95_latency_limit_ms` | P95延迟限制，用来判断最慢的高分位任务延迟是否超过业务目标 |
+| `min_real_coverage_rate` | 最低真实模型覆盖率，用来约束mock任务占比不能过高 |
+| `blocking_reasons` | 硬阻塞原因列表，用来说明为什么当前配置不应直接扩大运行 |
+| `warning_messages` | 风险提示列表，用来说明哪些地方可以继续试跑但不能过度解读 |
+| `controlled_trial_plan` | 受控小样本试跑建议，用来在预算通过但延迟失败时说明下一轮应该缩到哪些文件、如何拆开 mock / PaddleOCR / DeepSeek 试跑、哪些调用需要授权 |
+| `suggested_include_files` | 建议传给 `--include-files` 的文件名列表，用来避免误跑完整输入目录 |
+| `trial_commands` | 报告生成的试跑命令参考，只供人工选择执行；报告本身不会执行命令或触发模型调用 |
+
 ## 7. 文本主分类评估怎么读
 
 文本主分类评估用于回答：DeepSeek 输出的 `topic` 主分类是否命中人工标准答案。
@@ -277,6 +331,18 @@ output/batch_paddleocr_keyframes_20260724_retry/
 ```text
 output/batch_paddleocr_keyframes_20260724_retry/image_ocr_eval_summary.md
 output/batch_paddleocr_keyframes_20260724_retry/image_ocr_eval_summary.json
+output/batch_paddleocr_keyframes_20260724_retry/image_ocr_error_analysis_img_9.md
+output/batch_paddleocr_keyframes_20260724_retry/image_ocr_error_analysis_img_9.json
+output/batch_paddleocr_keyframes_20260724_retry/image_ocr_gate_report_keyframes.md
+output/batch_paddleocr_keyframes_20260724_retry/image_ocr_gate_report_keyframes.json
+output/batch_paddleocr_keyframes_20260724_retry/image_ocr_preprocess_experiment_img_9.md
+output/batch_paddleocr_keyframes_20260724_retry/image_ocr_preprocess_experiment_img_9.json
+output/batch_paddleocr_keyframes_20260724_retry/image_ocr_latency_profile_img_9.md
+output/batch_paddleocr_keyframes_20260724_retry/image_ocr_latency_profile_img_9.json
+output/batch_paddleocr_keyframes_20260724_retry/ocr_backend_advice.md
+output/batch_paddleocr_keyframes_20260724_retry/ocr_backend_advice.json
+output/batch_paddleocr_keyframes_20260724_retry/rapidocr_candidate_eval.md
+output/batch_paddleocr_keyframes_20260724_retry/rapidocr_candidate_eval.json
 ```
 
 本批次的关键结果：
@@ -292,7 +358,57 @@ output/batch_paddleocr_keyframes_20260724_retry/image_ocr_eval_summary.json
 | OCR平均延迟 | 18006ms | 三张图本地OCR调用平均耗时 |
 | OCR P95延迟 | 28261ms | 受最慢图片 `img_9.jpg` 影响 |
 
-该批次说明图片 OCR 链路已经有真实质量证据，但 `img_9.jpg` 的完整段落召回率只有47.62%，说明复杂图表、密集文字或小字号仍是当前瓶颈。
+该批次说明图片 OCR 链路已经有真实质量证据，但批次级闸门仍未通过：三张关键帧整体完整段落召回率78.05%、字符错误率11.01%、P95延迟28261ms，均未达到当前MVP观察阈值。其中 `img_9.jpg` 的完整段落召回率只有47.62%，错误主要集中在 `pipeline_module`、`buffer_size` 和 `tlb_size` 等小字号结构图文字；三张图虽然 `img_7.jpg` 和 `img_8.jpg` 的质量指标较好，但延迟也超过2秒目标。
+
+`image_ocr_gate_report_keyframes.md` 的读法：
+
+- 先看 `gate_decision`：这是批次级闸门判断，用来决定是否能离开图片OCR功能进入下一功能；
+- 再看 `blocking_files`：这是阻塞闸门通过的文件列表，用来区分质量阻塞和延迟阻塞；
+- 再看逐图检查：`img_9.jpg` 是质量和延迟双阻塞，`img_7.jpg` 与 `img_8.jpg` 主要是延迟阻塞；
+- 最后看建议：预处理实验和延迟拆分已经完成，下一轮应基于质量、延迟和本地算力边界做 OCR 方案取舍判断，而不是直接扩展新功能。
+
+`image_ocr_preprocess_experiment_img_9.md` 的读法：
+
+- 原图基线：`img_9.jpg` 完整段落召回率47.62%、字符错误率20.27%、OCR延迟28261ms；
+- 整图放大2倍：完整段落召回率提升到52.38%，但字符错误率仍为20.27%，OCR延迟增加到64146ms；
+- 左右分区放大2倍：完整段落召回率提升到50.00%，字符错误率仍为20.27%，OCR延迟为32421ms；
+- 结论：预处理方向有轻微召回提升，但没有达到90%召回率、5%字符错误率和2秒延迟目标，不能作为已通过能力写入主流程。
+
+`image_ocr_latency_profile_img_9.md` 的读法：
+
+- 先看 `engine_create_ms`：本地OCR引擎创建和模型加载耗时8834ms，用于判断冷启动或初始化开销；
+- 再看 `predict_ms`：首次图片推理60373ms，热启动第二次图片推理56042ms，说明主要瓶颈在本地CPU模型推理；
+- 再看 `decode_ms` 和 `parse_ms`：图片解码15ms/10ms，结果解析0ms，说明慢点不在文件读取或后处理；
+- 结论：即使不计引擎创建，单图热启动OCR仍远高于2秒目标；下一轮不应扩大到ASR、视觉理解或视频真实处理，应先判断是否接受本地CPU OCR边界，或后续评估更轻量/服务化OCR方案。
+
+`ocr_backend_advice.md` 的读法：
+
+- 先看 `switch_signal`：当前为 `evaluate_alternative_backends`，表示已有PaddleOCR证据不足以直接放行，需要评估替代OCR；
+- 再看 `recommended_next_backend_id`：当前为 `cloud_ocr_service`，表示 RapidOCR 已实测未过闸门后，只有在用户授权外部API时才继续做服务化OCR小样本评估；
+- 再看 `evaluation_order`：它是测试顺序，不是已接入能力，也不是最终模型选型结论；
+- 最后看 `candidate_evaluations`：这里记录 RapidOCR 候选已经真实本地运行，状态为 `not_passed`，因此不应接入主流程。
+
+`rapidocr_candidate_eval.md` 的读法：
+
+- 先看依赖状态：当前为 `available`，表示本机 RapidOCR 相关依赖已经可用，本轮确实运行了本地候选OCR；
+- 再看闸门判断：当前为 `not_passed`，表示三张关键帧样本没有达到当前召回率、字符错误率和P95延迟目标；
+- 再看批次指标：完整段落召回率82.93%、字符错误率10.64%、P95延迟4294ms，外部API成本0元；
+- 再看逐图结果：`img_7.jpg` 为100.00%召回、0.00%字符错误率，`img_8.jpg` 为95.65%召回、3.32%字符错误率，`img_9.jpg` 只有54.76%召回、20.08%字符错误率，说明弱样本仍未解决；
+- 下一步不是接入 RapidOCR，而是把它作为已实测未通过候选记录下来。
+
+字段说明：
+
+| 字段 | 含义与作用 |
+|---|---|
+| `backend_id` | OCR候选后端的唯一标识，用来区分当前后端和待评估后端 |
+| `dependency` | 本地依赖状态，用来判断候选OCR本轮是否真实运行 |
+| `switch_signal` | 是否需要从当前PaddleOCR转向替代方案评估的判断信号 |
+| `evaluation_order` | 下一步建议评估的OCR候选顺序，只表示测试优先级，不表示已接入 |
+| `engine_create_ms` | 本地OCR引擎创建耗时，用于观察模型加载和初始化开销 |
+| `decode_ms` | 图片读取和解码耗时，用于判断是否慢在文件读取或图像解码 |
+| `predict_ms` | OCR模型推理耗时，用于判断核心瓶颈是否在模型识别 |
+| `parse_ms` | PaddleOCR结果解析耗时，用于判断后处理是否形成明显开销 |
+| `attempt_total_ms` | 单次图片解码、模型推理和结果解析的合计耗时，不包含引擎创建 |
 
 ## 9. 失败 / 部分成功演示怎么读
 
@@ -310,6 +426,10 @@ output/batch_failure_demo_20260721_190052
 | `ai_content_sample.txt` | 文本分析失败 | `failed` | 关键文本分析失败，无法产出主分类、关键词和摘要 |
 | `例子.mp4` | 语音识别失败 | `partial_success` | 音频转写缺失，但 OCR 和视觉理解仍成功，文本分析继续产出结果 |
 
+新增的低质量 OCR 闸门处理的是另一类情况：OCR 模型调用本身成功，但返回文字疑似乱码或过度碎片化。此时 `model_calls.jsonl` 中 OCR 调用仍是 `success`，因为模型没有报错；但 `results.jsonl` 中该文件会进入 `partial_success`，并写入 `quality_flags=low_quality_ocr_text` 和 `warning_messages`。这能避免把“有一段OCR文字”直接误当成“有可靠文字证据”。
+
+对应的受控批次是 `output/batch_controlled_paddleocr_gate_20260729/`。该批次只用于验证低质量 OCR 结果闸门是否生效，不代表图片理解能力已经完成，也不代表视频 OCR 已经接入真实模型。
+
 字段说明：
 
 | 字段 | 含义与作用 |
@@ -317,6 +437,7 @@ output/batch_failure_demo_20260721_190052
 | `partial_success` | 部分成功状态，表示最终结果已经生成，但证据不完整 |
 | `failed` | 失败状态，表示关键步骤失败，无法产出有效最终结果 |
 | `missing_evidence` | 缺失证据，用于解释部分成功或失败原因 |
+| `quality_flags` | 机器可读质量风险标签，用于标记低质量OCR、用途降级等可统计问题 |
 | `warning_messages` | 风险提示，用于说明缺失证据会怎样影响结果可信度 |
 | `error_message` | 技术错误信息，用于定位失败环节 |
 
@@ -330,12 +451,15 @@ output/batch_failure_demo_20260721_190052
 - 返回输入 token 和输出 token 用量，并用于估算真实调用成本。
 - 记录真实调用延迟。
 - 文本主分类评估可以读取真实 DeepSeek 文本分析结果，并与人工标准答案比较。
+- 图片文件在显式选择 `paddleocr` 后，可以使用本地 PaddleOCR 生成真实 `ocr_text` 并计算分段质量指标。
+- RapidOCR 已作为本地OCR候选在三张关键帧上完成对照评估，但未接入主流水线。
 
 当前 mock 或占位部分包括：
 
 | 任务 | 当前状态 | 说明 |
 |---|---|---|
-| OCR | mock | 返回模拟文字，不是真实图片文字识别 |
+| 图片 OCR | 默认 mock / 可选本地 PaddleOCR | 默认返回模拟文字；显式选择 `paddleocr` 后已有五张正式图片真实评估；RapidOCR只做候选评估，未接入主流程 |
+| 视频 OCR | mock | 视频关键帧预处理仍是占位，因此视频 OCR 不能写成本地 PaddleOCR 真实推理 |
 | 视觉理解 | mock | 返回模拟视觉描述，不是真实图像理解 |
 | 语音识别 | mock | 返回模拟音频转写，不是真实音频识别 |
 | 视频预处理 | 占位 | 用于跑通关键帧和音频链路，不代表完整视频理解 |
