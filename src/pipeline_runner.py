@@ -27,6 +27,16 @@ from model_router import select_model
 from preprocessor import preprocess_file
 
 
+LOW_QUALITY_OCR_FLAG = "low_quality_ocr_text"
+LOW_QUALITY_OCR_WARNING = "OCR 返回了非空文字，但文本疑似乱码或过度碎片化，最终分析未把 OCR 文字作为可靠证据。"
+STATUS_AFFECTING_QUALITY_FLAGS = {LOW_QUALITY_OCR_FLAG}
+LOW_QUALITY_OCR_MIN_LINES = 6
+LOW_QUALITY_OCR_MAX_VISIBLE_CHARS = 80
+LOW_QUALITY_OCR_MIN_SHORT_LINE_RATIO = 0.7
+LOW_QUALITY_OCR_MIN_SINGLE_CHAR_LINE_RATIO = 0.25
+LOW_QUALITY_OCR_MIN_ASCII_NOISE_LINE_RATIO = 0.4
+
+
 def _now_iso() -> str:
     """返回当前本地时间的 ISO 字符串。"""
 
@@ -49,6 +59,49 @@ def _output_tokens(text: str) -> list[dict[str, Any]]:
     """把输出文字长度粗略转换为输出 token 数。"""
 
     return [{"unit_type": "output_tokens", "quantity": max(1, len(text) // 2)}]
+
+
+def _visible_text_length(text: str) -> int:
+    """计算去掉空白后的可见字符数。"""
+
+    return sum(1 for char in text if not char.isspace())
+
+
+def _has_ascii_letter_or_digit(text: str) -> bool:
+    """判断文本中是否包含英文字母或数字。"""
+
+    return any(char.isascii() and char.isalnum() for char in text)
+
+
+def _is_low_quality_ocr_text(ocr_text: str | None) -> bool:
+    """用保守启发式判断 OCR 文本是否疑似乱码或过度碎片化。
+
+    这个函数只判断明显不可用的 OCR 文字，不尝试替代人工基准评估。
+    为降低误伤，它要求短行碎片、单字行和 ASCII 噪声同时明显存在。
+    """
+
+    if not ocr_text or not ocr_text.strip():
+        return False
+
+    lines = [line.strip() for line in ocr_text.splitlines() if line.strip()]
+    if not lines:
+        return False
+
+    visible_length = _visible_text_length(ocr_text)
+    short_lines = sum(1 for line in lines if _visible_text_length(line) <= 5)
+    single_char_lines = sum(1 for line in lines if _visible_text_length(line) == 1)
+    ascii_noise_lines = sum(1 for line in lines if _has_ascii_letter_or_digit(line))
+    short_line_ratio = short_lines / len(lines)
+    single_char_line_ratio = single_char_lines / len(lines)
+    ascii_noise_line_ratio = ascii_noise_lines / len(lines)
+
+    return (
+        len(lines) >= LOW_QUALITY_OCR_MIN_LINES
+        and visible_length <= LOW_QUALITY_OCR_MAX_VISIBLE_CHARS
+        and short_line_ratio >= LOW_QUALITY_OCR_MIN_SHORT_LINE_RATIO
+        and single_char_line_ratio >= LOW_QUALITY_OCR_MIN_SINGLE_CHAR_LINE_RATIO
+        and ascii_noise_line_ratio >= LOW_QUALITY_OCR_MIN_ASCII_NOISE_LINE_RATIO
+    )
 
 
 def _build_success_call(
@@ -299,7 +352,11 @@ def run_file_pipeline(
         else:
             evidence.update(ocr_result)
             if ocr_result["ocr_text"]:
-                evidence_used.append("ocr_text")
+                if ocr_backend == "paddleocr" and _is_low_quality_ocr_text(ocr_result["ocr_text"]):
+                    quality_flags.append(LOW_QUALITY_OCR_FLAG)
+                    warning_messages.append(LOW_QUALITY_OCR_WARNING)
+                else:
+                    evidence_used.append("ocr_text")
             model_calls.append(
                 _build_success_call(
                     call_index=len(model_calls) + 1,
@@ -422,7 +479,11 @@ def run_file_pipeline(
     else:
         raise ValueError(f"不支持的文件类型: {media_type}")
 
-    evidence_text = " ".join(str(value) for value in evidence.values() if value)
+    analysis_evidence = dict(evidence)
+    if LOW_QUALITY_OCR_FLAG in quality_flags:
+        analysis_evidence["ocr_text"] = None
+
+    evidence_text = " ".join(str(value) for value in analysis_evidence.values() if value)
     analysis_started_at = perf_counter()
     api_usage: dict[str, int] = {}
     api_attempts: list[dict[str, Any]] = []
@@ -435,7 +496,7 @@ def run_file_pipeline(
             raise RuntimeError(injected_failures["text_analysis"])
         if text_analysis_backend == "deepseek":
             analysis_result = deepseek_text_analysis_client(
-                evidence,
+                analysis_evidence,
                 api_key=deepseek_api_key,
                 model_name=deepseek_model_name,
                 base_url=deepseek_base_url,
@@ -445,7 +506,7 @@ def run_file_pipeline(
             api_attempts = analysis_result.pop("_api_attempts", [])
             analysis_quality_flags = analysis_result.pop("_quality_flags", [])
         elif text_analysis_backend == "mock":
-            analysis_result = mock_text_analysis_client(evidence)
+            analysis_result = mock_text_analysis_client(analysis_evidence)
         else:
             raise ValueError(f"不支持的文本分析后端: {text_analysis_backend}")
     except Exception as exc:
@@ -585,8 +646,9 @@ def run_file_pipeline(
             )
         )
 
-    processing_status = "partial_success" if missing_evidence else "success"
     quality_flags.extend(str(flag) for flag in analysis_quality_flags if flag not in quality_flags)
+    has_status_affecting_quality_flag = any(flag in STATUS_AFFECTING_QUALITY_FLAGS for flag in quality_flags)
+    processing_status = "partial_success" if missing_evidence or has_status_affecting_quality_flag else "success"
     result = {
         "schema_version": "v1",
         "batch_id": file_record["batch_id"],

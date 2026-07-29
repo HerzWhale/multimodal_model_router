@@ -15,10 +15,14 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from image_ocr_evaluator import (  # noqa: E402
+    analyze_image_ocr_errors,
+    build_image_ocr_gate_report,
     evaluate_image_ocr,
     levenshtein_distance,
     normalize_ocr_text,
     read_ocr_gold_rows,
+    write_image_ocr_error_analysis,
+    write_image_ocr_gate_report,
     write_image_ocr_report,
 )
 
@@ -39,6 +43,31 @@ def _gold_row(
         "is_required": is_required,
         "evaluation_scope": "business_content",
         "reviewer_note": "测试文字块",
+    }
+
+
+def _detail(
+    segment_id: str,
+    segment_type: str,
+    gold_text: str,
+    comparison_text: str,
+    edit_distance: int,
+    *,
+    is_exact_match: bool = False,
+) -> dict:
+    """构造一条OCR评估明细。"""
+
+    return {
+        "segment_id": segment_id,
+        "segment_type": segment_type,
+        "gold_text": gold_text,
+        "matched_ocr_text": comparison_text,
+        "comparison_text": comparison_text,
+        "is_exact_match": is_exact_match,
+        "gold_character_count": len(normalize_ocr_text(gold_text)),
+        "edit_distance": edit_distance,
+        "character_error_rate": round(edit_distance / len(normalize_ocr_text(gold_text)), 6),
+        "reviewer_note": "测试明细",
     }
 
 
@@ -186,6 +215,243 @@ class ImageOcrEvaluatorTest(unittest.TestCase):
 
         self.assertEqual(report["exact_segment_recall"], 1.0)
         self.assertEqual(report["character_error_rate"], 0.0)
+
+    def test_error_analysis_groups_errors_and_builds_gate_decision(self) -> None:
+        evaluation_report = {
+            "schema_version": "v1",
+            "file_name": "img_9.jpg",
+            "required_segment_count": 3,
+            "exact_segment_count": 1,
+            "exact_segment_recall": 0.333333,
+            "character_error_rate": 0.25,
+            "details": [
+                _detail(
+                    "title",
+                    "diagram_title",
+                    "麒麟9010",
+                    "麒麟9010",
+                    0,
+                    is_exact_match=True,
+                ),
+                _detail(
+                    "tlb",
+                    "tlb_size",
+                    "L1D TLB 128 pages",
+                    "128pages",
+                    6,
+                ),
+                _detail(
+                    "prf",
+                    "pipeline_module",
+                    "Integer PRF 158 Entry",
+                    "IntegerPRF",
+                    8,
+                ),
+            ],
+        }
+        batch_summary = {
+            "batch_id": "batch_test",
+            "file_metrics": [{"file_name": "img_9.jpg", "ocr_latency_ms": 28261}],
+        }
+
+        analysis = analyze_image_ocr_errors(evaluation_report, batch_summary=batch_summary)
+
+        self.assertEqual(analysis["file_name"], "img_9.jpg")
+        self.assertEqual(analysis["overview"]["error_segment_count"], 2)
+        self.assertEqual(analysis["overview"]["ocr_latency_ms"], 28261)
+        self.assertEqual(analysis["gate_decision"]["status"], "not_passed")
+        self.assertIn("继续留在图片OCR功能内", analysis["gate_decision"]["next_action"])
+        self.assertEqual(
+            [row["segment_type"] for row in analysis["error_by_segment_type"][:2]],
+            ["pipeline_module", "tlb_size"],
+        )
+        self.assertEqual(
+            {row["error_bucket"] for row in analysis["error_buckets"]},
+            {"label_retained_value_lost", "value_retained_label_lost"},
+        )
+
+    def test_write_image_ocr_error_analysis_outputs_json_and_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            evaluation_report_path = tmp_path / "eval.json"
+            batch_summary_path = tmp_path / "summary.json"
+            output_json_path = tmp_path / "analysis.json"
+            output_markdown_path = tmp_path / "analysis.md"
+            evaluation_report_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "v1",
+                        "file_name": "img_9.jpg",
+                        "required_segment_count": 1,
+                        "exact_segment_count": 0,
+                        "exact_segment_recall": 0.0,
+                        "character_error_rate": 0.5,
+                        "details": [
+                            _detail(
+                                "buffer",
+                                "buffer_size",
+                                "Re-order Buffer 504 Entry",
+                                "Re-orderBuffer",
+                                8,
+                            )
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            batch_summary_path.write_text(
+                json.dumps(
+                    {
+                        "batch_id": "batch_test",
+                        "file_metrics": [{"file_name": "img_9.jpg", "ocr_latency_ms": 3000}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            json_path, markdown_path = write_image_ocr_error_analysis(
+                evaluation_report_path=evaluation_report_path,
+                batch_summary_path=batch_summary_path,
+                output_json_path=output_json_path,
+                output_markdown_path=output_markdown_path,
+            )
+
+            analysis = json.loads(json_path.read_text(encoding="utf-8"))
+            markdown = markdown_path.read_text(encoding="utf-8")
+
+        self.assertEqual(analysis["analysis_name"], "image_ocr_error_analysis")
+        self.assertIn("图片 OCR 错误归因报告", markdown)
+        self.assertIn("not_passed", markdown)
+
+    def test_batch_gate_report_blocks_next_feature_when_quality_or_latency_fails(self) -> None:
+        summary_report = {
+            "batch_id": "batch_test",
+            "evaluated_files": 2,
+            "total_required_segment_count": 12,
+            "overall_exact_segment_recall": 0.75,
+            "overall_character_error_rate": 0.12,
+            "ocr_avg_latency_ms": 12000,
+            "ocr_p95_latency_ms": 25000,
+            "ocr_cost_cny": 0.0,
+            "file_metrics": [
+                {
+                    "file_name": "img_ok.jpg",
+                    "required_segment_count": 5,
+                    "exact_segment_count": 5,
+                    "exact_segment_recall": 1.0,
+                    "character_error_rate": 0.0,
+                    "ocr_latency_ms": 1800,
+                },
+                {
+                    "file_name": "img_9.jpg",
+                    "required_segment_count": 7,
+                    "exact_segment_count": 4,
+                    "exact_segment_recall": 0.571429,
+                    "character_error_rate": 0.2,
+                    "ocr_latency_ms": 25000,
+                },
+            ],
+        }
+        error_analysis_report = {
+            "file_name": "img_9.jpg",
+            "gate_decision": {"status": "not_passed", "next_action": "继续留在图片OCR功能内。"},
+            "error_by_segment_type": [
+                {"segment_type": "buffer_size", "error_segments": 3, "character_error_rate": 0.3}
+            ],
+            "error_buckets": [
+                {
+                    "error_bucket": "label_retained_value_lost",
+                    "segment_count": 3,
+                    "description": "标签识别到但数值缺失。",
+                }
+            ],
+        }
+
+        report = build_image_ocr_gate_report(
+            summary_report,
+            error_analysis_report=error_analysis_report,
+        )
+
+        self.assertEqual(report["gate_decision"]["status"], "not_passed")
+        self.assertEqual(report["gate_decision"]["blocking_files"], ["img_9.jpg"])
+        self.assertIn("不要开启ASR", report["recommendations"][0])
+        self.assertEqual(report["weak_sample_analysis"]["file_name"], "img_9.jpg")
+
+    def test_batch_gate_report_handles_missing_metric_without_hard_calculation(self) -> None:
+        summary_report = {
+            "batch_id": "batch_missing",
+            "file_metrics": [
+                {
+                    "file_name": "img_missing.jpg",
+                    "required_segment_count": 1,
+                    "exact_segment_count": 1,
+                    "exact_segment_recall": 1.0,
+                    "character_error_rate": 0.0,
+                }
+            ],
+        }
+
+        report = build_image_ocr_gate_report(summary_report)
+
+        self.assertEqual(report["gate_decision"]["status"], "not_passed")
+        self.assertIsNone(report["batch_overview"]["ocr_p95_latency_ms"])
+        self.assertTrue(
+            any("缺少批次OCR P95延迟" in reason for reason in report["gate_decision"]["reasons"])
+        )
+
+    def test_write_image_ocr_gate_report_outputs_json_and_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            summary_path = tmp_path / "summary.json"
+            analysis_path = tmp_path / "analysis.json"
+            output_json_path = tmp_path / "gate.json"
+            output_markdown_path = tmp_path / "gate.md"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "batch_id": "batch_test",
+                        "evaluated_files": 1,
+                        "total_required_segment_count": 1,
+                        "overall_exact_segment_recall": 1.0,
+                        "overall_character_error_rate": 0.0,
+                        "ocr_avg_latency_ms": 1000,
+                        "ocr_p95_latency_ms": 1000,
+                        "ocr_cost_cny": 0.0,
+                        "file_metrics": [
+                            {
+                                "file_name": "img_ok.jpg",
+                                "required_segment_count": 1,
+                                "exact_segment_count": 1,
+                                "exact_segment_recall": 1.0,
+                                "character_error_rate": 0.0,
+                                "ocr_latency_ms": 1000,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            analysis_path.write_text(
+                json.dumps({"file_name": "img_ok.jpg"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            json_path, markdown_path = write_image_ocr_gate_report(
+                summary_report_path=summary_path,
+                error_analysis_path=analysis_path,
+                output_json_path=output_json_path,
+                output_markdown_path=output_markdown_path,
+            )
+
+            report = json.loads(json_path.read_text(encoding="utf-8"))
+            markdown = markdown_path.read_text(encoding="utf-8")
+
+        self.assertEqual(report["report_name"], "image_ocr_batch_gate_report")
+        self.assertIn("图片 OCR 批次级闸门报告", markdown)
+        self.assertIn("passed", markdown)
 
 
 if __name__ == "__main__":

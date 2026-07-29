@@ -16,7 +16,7 @@ sys.path.insert(0, str(SRC_DIR))
 from cost_latency_tracker import load_model_prices
 from model_clients import DeepSeekAttemptsExhausted, DeepSeekResponseError
 from model_router import load_routing_rules
-from pipeline_runner import run_file_pipeline
+from pipeline_runner import LOW_QUALITY_OCR_FLAG, _is_low_quality_ocr_text, run_file_pipeline
 
 
 class PipelineRunnerTest(unittest.TestCase):
@@ -85,6 +85,45 @@ class PipelineRunnerTest(unittest.TestCase):
         self.assertEqual(ocr_call["model_name"], "PP-OCRv5_mobile")
         self.assertEqual(ocr_call["cost_cny"], 0.0)
         mock_ocr.assert_called_once_with(str(path))
+
+    def test_low_quality_ocr_gate_flags_fragmented_noise(self) -> None:
+        bad_ocr_text = "1n22\nS\nluiin22\n治\nluiS\n灯\nutin22\n6l\ncadiae  sota\n自药m"
+        good_ocr_text = "食影双修\n专注于影视解说视频的创作\n《功夫女足》首评来了！"
+
+        self.assertTrue(_is_low_quality_ocr_text(bad_ocr_text))
+        self.assertFalse(_is_low_quality_ocr_text(good_ocr_text))
+
+    def test_low_quality_ocr_gate_does_not_flag_normal_short_lines(self) -> None:
+        normal_short_lines = "新闻资讯\n娱乐休闲\n知识科普\n生活日常\n科技数码\n体育健康\n财经商业\n广告营销\n其他"
+
+        self.assertFalse(_is_low_quality_ocr_text(normal_short_lines))
+
+    @patch("pipeline_runner.paddleocr_client")
+    def test_image_pipeline_marks_low_quality_paddleocr_as_partial_success(self, mock_ocr) -> None:
+        mock_ocr.return_value = {
+            "ocr_text": "1n22\nS\nluiin22\n治\nluiS\n灯\nutin22\n6l\ncadiae  sota\n自药m"
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "bad_ocr.png"
+            path.write_bytes(b"image")
+            output = run_file_pipeline(
+                self._file_record(path, "image"),
+                self.routing_rules,
+                self.model_prices,
+                ocr_backend="paddleocr",
+            )
+
+        result = output["result"]
+        self.assertEqual(result["processing_status"], "partial_success")
+        self.assertIn(LOW_QUALITY_OCR_FLAG, result["quality_flags"])
+        self.assertTrue(result["warning_messages"])
+        self.assertNotIn("ocr_text", result["evidence_used"])
+        self.assertEqual(result["missing_evidence"], [])
+        self.assertEqual(output["errors"], [])
+        self.assertEqual(output["model_calls"][0]["status"], "success")
+        self.assertIn("1n22", result["ocr_text"])
+        self.assertNotIn("1n22", result["summary"])
 
     @patch("pipeline_runner.paddleocr_client")
     def test_image_pipeline_keeps_success_when_paddleocr_finds_no_text(self, mock_ocr) -> None:
