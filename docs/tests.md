@@ -15,16 +15,17 @@
 - 决策层能基于已有批次数据生成成本、延迟、真实/mock 边界和模型组合建议。
 - 路由策略模拟能基于已有批次检查预算、延迟、真实覆盖率等约束。
 - 路由策略预检查能在批处理前检查输入规模画像、历史延迟画像、路由完整性、预算约束、P95延迟约束、真实模型覆盖率和mock边界。
+- 受保护离线回归检查入口能在临时目录中验证mock批处理和routing preflight核心路径，不触发真实模型。
 - 文本主分类评估能生成评估模板、合并人工标准答案，并计算 Accuracy、Macro-F1 和分类级指标。
 - 主入口能在临时目录中跑通一次 mock 批处理。
 - 默认运行保持离线；PaddleOCR 单元测试使用替代引擎，不下载权重，DeepSeek 真实调用必须经过显式授权。
 
 ## 2. 当前已有测试数量
 
-当前测试目录共有 18 个测试文件。最近一次离线运行结果为：
+当前测试目录共有 19 个测试文件。最近一次离线运行结果为：
 
 ```text
-Ran 177 tests
+Ran 181 tests
 
 OK
 ```
@@ -36,6 +37,14 @@ python -m unittest discover -s tests
 ```
 
 说明：这条命令只运行本地离线单元测试，不会触发 DeepSeek API。
+
+受保护离线回归检查入口：
+
+```powershell
+python .\src\offline_regression_check.py
+```
+
+该命令会运行完整离线测试，并在临时目录中验证三文件 mock 批处理和 routing preflight 报告生成。它不会调用 DeepSeek，不会运行真实 PaddleOCR，不会调用云OCR，也不会向正式 `output/` 目录写入新批次。
 
 ## 3. 覆盖的模块
 
@@ -52,6 +61,7 @@ python -m unittest discover -s tests
 | `test_model_strategy_advisor.py` | `model_strategy_advisor.py` | 成本汇总、延迟瓶颈识别、真实/mock 边界识别、字段缺失稳健处理、JSON 和 Markdown 报告生成 |
 | `test_routing_policy.py` | `model_catalog.py` / `routing_policy.py` | 模型目录聚合、策略约束判断、真实/mock 覆盖率、预算扩展模拟和配置读取 |
 | `test_routing_preflight.py` | `routing_preflight.py` | 运行前输入规模画像、历史延迟画像、指定文件过滤、路由完整性检查、显式后端覆盖、预算约束、P95延迟约束、受控小样本试跑建议、mock与真实模型边界、缺价格稳健处理、JSON和Markdown报告写出 |
+| `test_offline_regression_check.py` | `offline_regression_check.py` | 受保护离线回归入口、临时目录mock批处理、临时目录routing preflight冒烟检查、安全边界字段和CLI JSON输出 |
 | `test_strategy_simulator.py` | `strategy_simulator.py` | 基于已有批次生成路由策略模拟 JSON/Markdown 报告，验证缺字段时不会硬算 |
 | `test_text_topic_evaluator.py` | `text_topic_evaluator.py` / `evaluation/` | 端到端 Accuracy、有效预测 Accuracy、预测覆盖率、Macro-F1、分类级指标、缺失/非法预测分离、缺标签、报告写入、18条样本一致性、标签泄漏、长样本长度和人工答案CSV的Excel编码兼容性 |
 | `test_image_ocr_evaluator.py` | `image_ocr_evaluator.py` / `evaluation/image_ocr_gold.csv` | 文字规范化、重复文字块不可重复占用、同一OCR行内多个非重叠文字块、最佳连续片段、字符编辑距离、可选文字排除、基准字段校验、JSON报告生成、单图错误归因、批次级闸门判断和报告写出 |
@@ -84,6 +94,9 @@ python -m unittest discover -s tests
 | `preflight_status` | 运行前预检查总状态，用来判断当前路由配置是否可以继续受控试跑 | 已测试 pass/warning/fail 相关路径中的 warning 和 fail |
 | `workload_profile` | 运行前规模画像，用于统计输入文件数、媒体类型分布和预计任务单位 | 已测试能从输入目录生成画像，并按指定文件过滤范围 |
 | `latency_profile` | 历史延迟画像，用于从已有模型调用记录中汇总任务级平均延迟、P95延迟和最大延迟 | 已测试能从 `model_calls.jsonl` 生成画像，并识别mock延迟边界 |
+| `overall_status` | 受保护离线回归检查的总状态，用来判断全部核心检查是否通过 | 已测试全部步骤通过时返回 `pass` |
+| `boundary` | 回归检查的安全边界说明，用来确认是否调用真实API、真实PaddleOCR或正式output | 已测试默认不调用真实模型，且只写临时目录 |
+| `steps` | 回归检查的逐项结果列表，用来定位mock批处理或routing preflight哪一步失败 | 已测试包含 `mock_batch_smoke` 和 `routing_preflight_smoke` |
 | `expected_units_by_task` | 各任务的预估计量单位，用来把单位价格转换成整批预算估算 | 已测试完整用量可计算总成本，视频缺少音频秒数时不会硬算语音识别成本 |
 | `historical_p95_latency_by_task_ms` | 按任务类型整理的历史P95延迟，用于把已有运行经验带入运行前延迟预检查 | 已测试可触发延迟约束失败 |
 | `budget_limit_cny` | 预算上限，用来判断预估用量下的模型组合是否可能超预算 | 已测试提供预估用量时能计算成本并触发预算失败 |

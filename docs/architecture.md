@@ -31,6 +31,7 @@ src/
   ├─ model_catalog.py              从调用明细聚合模型目录
   ├─ routing_policy.py             离线路由策略与约束判断
   ├─ routing_preflight.py          批处理前路由策略预检查
+  ├─ offline_regression_check.py   受保护离线回归检查入口
   ├─ strategy_simulator.py         路由策略离线模拟报告生成
   └─ text_topic_evaluator.py       文本主分类评估报告生成
 

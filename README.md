@@ -179,6 +179,14 @@ python -m unittest discover -s tests
 
 说明：默认离线测试会替换 PaddleOCR 引擎，不下载模型权重、不进行真实图片推理，也不会触发 DeepSeek API。
 
+运行受保护离线回归检查：
+
+```powershell
+python .\src\offline_regression_check.py
+```
+
+该入口会先运行完整离线测试，再在临时目录中跑一次三文件 mock 批处理和一次 routing preflight 冒烟检查。它不调用 DeepSeek，不运行真实 PaddleOCR，不使用云OCR，也不会向正式 `output/` 目录写入新批次。若只想快速检查主流程和预检查链路，可以加 `--skip-unit-tests`。
+
 如需基于已经保存的真实OCR结果重新计算 `img_1.png` 的质量指标：
 
 ```powershell
