@@ -16,7 +16,7 @@ H:\实习\multimodal_model_router\output\batch_20260718_150348
 |---|---|---|
 | `ai_content_sample.txt` | 文本 | 展示文本读取、DeepSeek 文本分析、分类、摘要和业务用途生成 |
 | `img.png` | 图片 | 展示图片文件进入 OCR、视觉理解和文本分析流水线；OCR 和视觉理解为 mock |
-| `例子.mp4` | 视频 | 展示视频文件进入预处理、OCR、视觉理解、语音识别和文本分析流水线；视频上游为 mock 或占位 |
+| `例子.mp4` | 视频 | 旧批次展示视频文件进入统一流水线；历史视频 V0 批次只能抽取第一帧；当前代码已升级为视频 V1，可读取元信息并等距抽取最多 5 张关键帧，这些关键帧可交给 PaddleOCR 或 Qwen-VL；本机存在 ffmpeg 时可抽取 wav 音频文件，但真实 ASR 尚未接入 |
 
 字段说明：
 
@@ -25,6 +25,90 @@ H:\实习\multimodal_model_router\output\batch_20260718_150348
 | `file_name` | 原始文件名，用来识别每条结果对应哪份内容 |
 | `media_type` | 文件媒体类型，用来决定进入文本、图片还是视频流程 |
 | `source_path` | 原始文件路径，用来追溯输入文件来源 |
+| `preprocessing_artifacts` | 预处理产物摘要，用来说明视频元信息、关键帧抽取、音频提取状态和风险边界 |
+
+## 1.1 视频 V1 多关键帧预处理说明
+
+当前视频 V1 受控 mock 批次：
+
+```text
+H:\实习\multimodal_model_router\output\batch_video_keyframes_v1_mock_trial
+```
+
+运行命令：
+
+```powershell
+python .\src\main.py --input-dir .\input\sample_videos --include-files 例子.mp4 --text-analysis-backend mock --batch-id batch_video_keyframes_v1_mock_trial
+```
+
+该批次只验证视频 V1 多关键帧工程闭环，不调用 DeepSeek，不调用 Qwen-VL，不运行 PaddleOCR，不调用云端OCR或ASR。
+
+当前 V1 结果应这样读：
+
+- `preprocessing_artifacts` 显示视频元信息已经读取成功：时长约301567ms，9047帧，30fps，分辨率720×1280；
+- `keyframe_paths` 记录已写出的5张等距关键帧路径，说明视频画面证据覆盖了开头、中段和结尾附近的多个时间点；
+- `keyframe_metadata` 记录每张关键帧的源帧号和估算时间位置，例如0ms、75400ms、150767ms、226133ms和301533ms；
+- `model_calls.jsonl` 中有5次mock OCR、5次mock视觉理解、1次预期语音识别失败和1次mock文本分析；该历史批次生成于本地音频提取最小闭环之前；
+- 当前代码如果本机存在 ffmpeg，会尝试生成 wav 音频文件并进入 mock 语音识别分支；如果缺少 ffmpeg，会把 `audio_extraction_status` 记录为 `dependency_missing`，并继续把 `audio_transcript` 作为缺失证据；
+- 该批次不能解释为真实视频OCR质量、真实视频视觉理解质量或真实ASR质量。
+
+历史视频 V0 受控批次：
+
+```text
+H:\实习\multimodal_model_router\output\batch_video_v0_preprocess_20260804
+```
+
+运行命令：
+
+```powershell
+python .\src\main.py --input-dir .\input\sample_videos --include-files 例子.mp4 --text-analysis-backend mock --batch-id batch_video_v0_preprocess_20260804
+```
+
+该历史批次只验证本地视频预处理闭环，不调用 DeepSeek，不调用 Qwen-VL，不运行 PaddleOCR，不调用云端OCR或ASR。需要注意：它是 V0 单帧证据，不能代表当前 V1 多关键帧能力。
+
+当前结果应这样读：
+
+- `preprocessing_artifacts` 显示视频元信息已经读取成功：时长约301567ms，9047帧，30fps，分辨率720×1280；
+- `keyframe_paths` 在历史 V0 批次中只记录第一帧路径，说明当时的视频画面证据只有一个本地产物可以追踪；
+- `audio_extraction_status=not_implemented` 是历史 V0 批次的旧状态，表示当时未实现音频提取；当前代码会进一步区分 `extracted`、`dependency_missing`、`failed`、`timeout`、`empty_output` 和 `not_attempted_no_artifact_dir`；
+- 文件级 `processing_status=partial_success`，原因不是视频文件完全失败，而是“关键帧预处理成功，但音频证据缺失”；
+- `model_calls.jsonl` 中 OCR 和视觉理解仍是 mock 调用，不能解释为真实视频OCR或真实视频视觉理解质量；
+- `speech_to_text` 记录为 failed，且 `input_units` 为0，表示未调用ASR，不应把视频时长虚算成已发生的ASR成本。
+
+从当前代码版本起，如果要验证视频 V1 多关键帧进入上游模型，可以分别运行以下受控命令。
+
+本地 PaddleOCR 关键帧 OCR：
+
+```powershell
+python .\src\main.py --input-dir .\input\sample_videos --include-files 例子.mp4 --ocr-backend paddleocr --text-analysis-backend mock --batch-id batch_video_keyframes_paddleocr_trial
+```
+
+Qwen-VL 关键帧视觉理解：
+
+```powershell
+python .\src\main.py --input-dir .\input\sample_videos --include-files 例子.mp4 --vision-backend qwen_vl --allow-live-api --text-analysis-backend mock --batch-id batch_video_keyframes_qwen_vl_trial
+```
+
+第二条命令会访问 Qwen-VL 并可能产生费用，必须由用户明确授权后再运行。两条命令都会处理视频 V1 抽出的最多 5 张等距关键帧，但仍不代表完整视频理解；当前只有本地音频提取最小闭环，真实音频转写仍未实现。
+
+如果要验证 Qwen-VL 关键帧级重试，可以在确认费用和输入范围后增加：
+
+```powershell
+--max-api-retries 1
+```
+
+该参数只允许对可重试错误最多重试1次。某张关键帧第一次失败、第二次成功时，`model_calls.jsonl` 会同时保留失败尝试和成功尝试；最终 `visual_description` 会使用成功尝试的画面描述。如果某张关键帧重试后仍失败，系统会保留其他成功关键帧的画面描述，并把该文件标记为 `partial_success`，同时写入 `quality_flags=video_visual_keyframe_failed`。这属于失败补偿，不是完整视频理解能力。
+
+字段说明：
+
+| 字段 | 含义与作用 |
+|---|---|
+| `keyframe_paths` | 关键帧本地路径列表，用来追踪视频画面证据来自哪些预处理产物 |
+| `keyframe_metadata` | 每张关键帧的帧号、时间位置和路径，用来说明视频画面证据覆盖了哪些时间点 |
+| `keyframe_extraction_status` | 关键帧抽取状态，用来区分已抽取、未尝试、读取失败或写入失败 |
+| `audio_extraction_status` | 音频提取状态，用来说明是否已经生成真实音频文件；`extracted` 表示已写出音频，`dependency_missing` 表示本机缺少 ffmpeg，其他失败状态用于排查提取问题 |
+| `duration_source` | 视频时长来源，用来说明 `duration_ms` 是由 OpenCV 帧数和FPS估算，还是当前不可获得 |
+| `missing_evidence` | 缺失证据列表，用来解释为什么结果不是完全成功 |
 
 ## 2. 运行方式
 
@@ -77,7 +161,8 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 | `input_dir` | 本次批处理读取的输入目录，用来区分默认业务输入和受控评估样本 |
 | `batch_id` | 批次唯一标识，用来定位本次运行产生的输出目录 |
 | `text_analysis_backend` | 文本分析后端配置，用来决定使用 mock 还是 DeepSeek |
-| `--max-api-retries` | 可重试错误的最大重试次数；默认0，显式设为1才允许一次重试 |
+| `vision_understanding_backend` | 图片或视频关键帧视觉理解后端配置，用来决定使用 mock 还是 Qwen-VL |
+| `--max-api-retries` | 可重试错误的最大重试次数；默认0，显式设为1才允许一次重试；当前适用于 DeepSeek 和 Qwen-VL |
 | `--allow-live-api` | 真实 API 调用授权开关，用来防止误触发外部调用和费用 |
 
 ## 3. `results_readable.md` 怎么读
@@ -98,12 +183,27 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 | `evidence_used` | 实际使用的证据，用来判断结果基于原文、OCR、音频转写还是视觉描述 |
 | `missing_evidence` | 缺失证据，用来说明结果可信度可能受到什么影响 |
 | `models_used` | 文件级模型使用摘要，用来快速看到该文件经过哪些模型 |
+| `response_model_name` | 服务端响应模型名称，用来在人工可读结果中核对实际响应来自哪个模型或模型别名 |
 | `processing_cost_cny` | 文件级处理成本，单位人民币 |
 | `processing_time_ms` | 文件级处理耗时，单位毫秒 |
 
 本批次中文本文件的文本分析由 DeepSeek 真实生成。图片和视频结果需要如实按工程链路解读：OCR、视觉理解、语音识别仍是 mock，因此不能把这部分说成真实识别效果。
 
-机器处理时应读取 `results.jsonl`：它保存文件级结构化记录。从当前版本起，新批次中每一条完整记录只占一个物理行；人工查看仍优先使用本节介绍的 `results_readable.md`。本页引用的历史 Demo 批次生成较早，保留了当时的缩进式连续 JSON 对象，项目读取器仍可兼容，但不会为了展示而改写历史证据。
+机器处理时应读取 `results.jsonl`：它保存文件级结构化记录。从当前版本起，新批次中的 JSON 对象采用缩进式连续写法，每个输出字段独立换行，人工查看时不会挤在一行。新版 `results_readable.md` 会在“使用模型”里显示 `response_model_name`；历史批次不会自动改写。项目读取器兼容这种缩进式连续 JSON 对象，但它不是严格“一条记录一行”的标准 JSONL。
+
+## 3.1 `batch_metadata.json` 怎么读
+
+`batch_metadata.json` 用来解释这次批处理的运行口径，而不是保存单个文件结果。新批次会记录三个关键块：
+
+| 字段 | 含义与作用 |
+|---|---|
+| `selected_backends` | 本次命令或配置选择的后端组合，用来说明 OCR、视觉理解和文本分析分别选择了什么 |
+| `backend_runtime_summary` | 根据实际 `model_calls.jsonl` 汇总出的真实 API、本地模型和 mock 组合，用来判断本批次是否混合了真实与 mock 后端 |
+| `cost_estimation` | 成本估算说明，用来记录价格表来源、计算方法、是否包含 mock 估算、误差状态和是否已与真实账单对账 |
+
+注意：`cost_estimation` 只能说明估算方法是否可复现，不能自动证明估算值接近真实扣费。只有把本地估算值与供应商后台账单进行对账后，才能讨论整体误差范围；未对账前应记录为误差未知。
+
+如果 `backend_runtime_summary.contains_live_api=true` 且 `backend_runtime_summary.contains_mock=true`，说明该批次是“真实 API + mock”的混合批次。此时只能把真实 API 对应分支当作真实证据，不能把整个文件处理结果解释成全真实链路。
 
 ## 4. `batch_report.json` 怎么读
 
@@ -132,7 +232,7 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 
 ## 5. `model_calls.jsonl` 怎么读
 
-`model_calls.jsonl` 是模型调用明细。每一个 JSON 对象表示一次模型调用；新批次中每次调用占一个物理行，可由普通 JSONL 工具逐行解析。
+`model_calls.jsonl` 是模型调用明细。每一个 JSON 对象表示一次模型调用；新批次采用缩进式连续 JSON 对象，每个调用字段独立换行，项目内部读取器可解析，但普通“逐行 JSONL”工具可能无法直接读取。
 
 当前多模态批次共有 8 次调用：
 
@@ -152,6 +252,7 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 | `task_type` | 模型调用任务类型，例如 OCR、视觉理解、语音识别或文本分析 |
 | `provider` | 模型供应商，用来做供应商维度成本和延迟统计 |
 | `model_name` | 具体模型名称，用来追踪结果来自哪个模型 |
+| `response_model_name` | 服务端响应模型名称，用来核对请求模型和供应商实际返回模型是否一致 |
 | `input_units` | 输入用量和单位，例如输入 token、图片数量、帧数或音频秒数 |
 | `output_units` | 输出用量和单位，例如输出 token 或文本字符数 |
 | `cost_cny` | 单次调用成本，单位人民币 |
@@ -169,6 +270,57 @@ output/batch_20260718_150348/model_strategy_report.json
 output/batch_20260718_150348/routing_policy_simulation.md
 output/batch_20260718_150348/routing_policy_simulation.json
 ```
+
+## 6.1 成本对账报告怎么读
+
+成本对账报告来自已有 `model_calls.jsonl` 和手工账单 CSV，不调用任何供应商 API。当前 Qwen-VL 单图批次已经生成：
+
+```text
+output/batch_qwen_vl_response_model_check/cost_reconciliation_template.csv
+output/batch_qwen_vl_response_model_check/cost_reconciliation_billing_free_quota.csv
+output/batch_qwen_vl_response_model_check/cost_reconciliation.json
+output/batch_qwen_vl_response_model_check/cost_reconciliation.md
+```
+
+当前 Qwen-VL 单图批次已经基于供应商后台显示的 0.00 元实际扣费完成一次对账：系统估算成本为 0.003237 元，`billed_cost_cny` 填入 0.00 元，Qwen-VL 对账项的 `cost_confidence` 进入 `period_level_reconciled`，汇总层通过 `summary.confidence_counts` 记录周期级对账数量。这次结论不是“估算准确”，而是“系统已经能把理论估算成本、供应商实际扣费和差异原因记录到同一份报告中”。免费额度只是本次样例的差异原因，不代表生产环境常态。原始空模板仍保留为 `cost_reconciliation_template.csv`，已填写本次后台账单证据的模板为 `cost_reconciliation_billing_free_quota.csv`。
+
+对账模板有两类保护规则：第一，`billed_cost_cny` 为空时表示未对账；非数字、负数、NaN 或 Infinity 会被拒绝。第二，同一供应商、同一请求模型、同一响应模型和重叠时间窗口不能出现多条账单记录，避免被后写入记录静默覆盖。
+
+如果要做一次真实成本校准，可以新建一个干净时间窗口，只运行 Qwen-VL 图片视觉理解：
+
+```powershell
+python .\src\main.py --input-dir .\input\sample_images --include-files img_1.png,img_7.jpg,img_8.jpg --ocr-backend mock --vision-backend qwen_vl --text-analysis-backend mock --allow-live-api --batch-id batch_qwen_vl_cost_calibration_20260804
+```
+
+运行前后不要同时运行 DeepSeek、PaddleOCR、ASR 或其他真实 API。运行完成后，先生成成本对账模板：
+
+```powershell
+python .\src\cost_reconciliation.py template .\output\batch_qwen_vl_cost_calibration_20260804 .\output\batch_qwen_vl_cost_calibration_20260804\cost_reconciliation_template.csv
+```
+
+再把供应商后台对应时间窗口内的真实扣费填入 `billed_cost_cny`，并生成对账报告：
+
+```powershell
+python .\src\cost_reconciliation.py reconcile .\output\batch_qwen_vl_cost_calibration_20260804 .\output\batch_qwen_vl_cost_calibration_20260804\cost_reconciliation_template.csv .\output\batch_qwen_vl_cost_calibration_20260804\cost_reconciliation.json .\output\batch_qwen_vl_cost_calibration_20260804\cost_reconciliation.md
+```
+
+没有真实账单金额前，不能把估算成本写成已验证成本。如果供应商后台显示免费额度抵扣，应填入真实扣费 `0.00`，并在账单来源和备注中说明免费额度来源。
+
+字段说明：
+
+| 字段 | 含义与作用 |
+|---|---|
+| `estimated_cost_cny` | 系统根据用量和本地价格表计算出的估算成本 |
+| `billed_cost_cny` | 供应商后台显示或账单导出的实际扣费 |
+| `cost_delta_cny` | 实际扣费减去估算成本后的金额差 |
+| `cost_delta_rate` | 成本偏差比例，用于观察误差规模 |
+| `billing_granularity` | 账单粒度，用来区分单次调用、小时级、日级或模型级对账 |
+| `bill_source` | 真实扣费来源，例如供应商控制台人工查看或供应商导出文件 |
+| `matching_method` | 系统调用记录和供应商账单的匹配方式，例如供应商、模型和时间窗口匹配 |
+| `bill_reconciled` | 是否已经填入供应商账单金额并完成对账 |
+| `cost_confidence` | 成本可信度状态，用于区分未验证、单次调用级对账和时间段级对账 |
+| `matched_call_ids` | 实际参与账单核对的模型调用编号列表 |
+| `unmatched_billing_records` | 没有匹配到本批次模型调用的账单记录，用于排查账单时间窗口或模型名称错误 |
 
 推荐阅读顺序：
 
@@ -205,26 +357,29 @@ output/routing_preflight_current/routing_preflight_report.json
 复现命令：
 
 ```powershell
-python .\src\routing_preflight.py --input-dir .\input --ocr-backend paddleocr --text-analysis-backend deepseek --budget-limit-cny 50 --expected-audio-seconds-per-video 60 --historical-model-calls ".\output\batch_20260718_150348\model_calls.jsonl,.\output\batch_paddleocr_keyframes_20260724_retry\model_calls.jsonl,.\output\batch_text_eval_20260722_135443\model_calls.jsonl" --output-dir .\output\routing_preflight_current
+python .\src\routing_preflight.py --input-dir .\input --include-files ai_content_sample.txt,img.png,img_1.png --ocr-backend paddleocr --text-analysis-backend deepseek --budget-limit-cny 50 --min-real-coverage-rate 0.4 --expected-audio-seconds-per-video 60 --historical-model-calls ".\output\batch_20260718_150348\model_calls.jsonl,.\output\batch_paddleocr_keyframes_20260724_retry\model_calls.jsonl,.\output\batch_text_eval_20260722_135443\model_calls.jsonl,.\output\batch_controlled_mock_trial_20260802\model_calls.jsonl,.\output\batch_controlled_paddleocr_trial_20260802\model_calls.jsonl,.\output\batch_controlled_deepseek_text_trial_20260802\model_calls.jsonl,.\output\batch_controlled_deepseek_text_retry_diagnostics_20260802\model_calls.jsonl" --output-dir .\output\routing_preflight_current
 ```
 
-本次预检查基于默认输入目录、显式选择的 PaddleOCR 图片OCR后端、DeepSeek 文本分析后端和三个已有历史调用批次生成。它只读取本地文件清单、配置和历史 `model_calls.jsonl`，不触发 PaddleOCR 推理，不触发 DeepSeek API，也不产生新的费用。
+本次预检查基于 3 个受控输入文件、显式选择的 PaddleOCR 图片OCR后端、DeepSeek 文本分析后端和已有历史调用批次生成。它只读取本地文件清单、配置和历史 `model_calls.jsonl`，不触发 PaddleOCR 推理，不触发 DeepSeek API，也不产生新的费用。
 
 当前结果应这样解读：
 
-- `preflight_status` 为 `fail`，表示当前不建议直接扩大运行；
-- `workload_profile` 显示本次纳入12个输入样本：1个文本、10张图片、1个视频；
-- `latency_profile` 从已有历史调用记录中提取任务级延迟：OCR P95 为28261ms，文本分析 P95 为7112ms；
-- `current_route` 显示 OCR、文本分析和汇总任务是非mock路线，视觉理解和语音识别仍是mock；
-- `real_coverage_rate` 为 60%，表示5类预期任务中有3类走非mock路线；
-- `expected_units_by_task` 基于运行前假设生成：OCR 13张图、视觉理解13帧、语音识别60秒、文本分析输入3989 token和输出3600 token；
-- `budget_limit_cny` 本次显式设为50元，按本地价格表估算总成本为0.171279元，因此预算检查通过；
-- `p95_latency_limit_ms` 在 balanced 策略中为3500ms；当前最大任务级历史P95为28261ms，因此延迟检查失败；
-- `blocking_reasons` 指出阻塞项是 `p95_latency_limit_ms` 未满足；
-- `warning_messages` 会提示视觉理解和语音识别仍是mock，不能解释为完整真实多模态能力；
-- `controlled_trial_plan` 给出下一轮受控小样本建议：最多3个文件，暂不纳入视频，建议使用 `--include-files ai_content_sample.txt,img.png,img_1.png`；先跑纯 mock，再单独跑本地 PaddleOCR，DeepSeek 文本试跑必须另行授权。
+- `preflight_status` 为 `warning`，表示当前没有硬阻塞，但仍存在不能扩大解释的风险；
+- `workload_profile` 显示本次纳入3个输入样本：1个文本、2张图片、0个视频；
+- `latency_profile` 从已有历史调用记录中提取任务级延迟：OCR P95 为56401ms，文本分析 P95 为7112ms；
+- `task_latency_targets_ms` 使用任务级P95目标：OCR 为60000ms，视觉理解为3500ms，文本分析为8000ms；这些目标是当前受控试跑闸门，不是线上生产SLA；
+- `task_latency_target_checks` 显示 OCR 56401ms低于60000ms、文本分析7112ms低于8000ms；视觉理解虽然记录为0ms低于3500ms，但该值来自mock占位，因此状态为 `warning`，不能解释成真实视觉模型P95达标；
+- `latency_bottleneck_analysis` 把慢因拆成三类：`ocr` 的56401ms来自本地 PaddleOCR 运行，`text_analysis` 的7112ms来自真实 DeepSeek API 调用，视觉理解的 mock 延迟不能用于判断真实供应商性能；由于当前预期任务不含视频，语音识别不会进入本轮慢因列表；
+- `current_route` 显示 OCR 和文本分析是非mock路线，视觉理解仍是mock；因为本批次没有视频，语音识别不进入当前预期任务；因为当前主流程没有触发长文本切分后的跨片段汇总，汇总任务也不进入当前预期任务；
+- `real_coverage_rate` 为 66.67%，表示3类当前预期任务中有2类走非mock路线；
+- `expected_units_by_task` 基于运行前假设生成：OCR 2张图、视觉理解2帧、文本分析输入789 token和输出900 token；本批次没有视频，因此不生成语音识别用量；
+- `budget_limit_cny` 本次显式设为50元，按本地价格表估算总成本为0.022589元，因此预算检查通过；
+- `p95_latency_limit_ms` 在当前配置中保留为全局兜底值；当 `task_latency_targets_ms` 已配置时，约束检查优先使用任务级目标，避免用同一个3500ms同时要求OCR、本地推理和文本API；
+- `blocking_reasons` 为空，表示当前没有硬阻塞项；
+- `warning_messages` 会提示视觉理解仍是mock，不能解释为完整真实图片理解能力；
+- `controlled_trial_plan` 给出下一轮受控小样本建议：最多3个文件，暂不纳入视频，建议使用 `--include-files ai_content_sample.txt,img.png,img_1.png`；先解释当前报告，再决定是否授权真实API试跑。
 
-因此，本报告的结论不是“完全不能继续”，而是：当前50元预算没有问题，但延迟约束失败；下一轮应继续小批量、受控范围跑，不能直接扩大到完整输入目录。
+因此，本报告的结论不是“可以直接扩大运行”，而是：当前50元预算没有问题，任务级延迟闸门在受控试跑口径下通过，但视觉理解仍是mock，本地OCR和DeepSeek延迟也只能按各自任务解释。下一轮仍应小批量、受控范围跑，不能直接扩大到完整输入目录，更不能直接进入视频大功能。
 
 字段说明：
 
@@ -233,6 +388,13 @@ python .\src\routing_preflight.py --input-dir .\input --ocr-backend paddleocr --
 | `preflight_status` | 运行前预检查总状态，用来判断当前配置是可继续、存在风险还是不建议直接运行 |
 | `workload_profile` | 运行前规模画像，用来统计输入文件数量、媒体类型分布和预估任务单位 |
 | `latency_profile` | 历史延迟画像，用来从已有调用记录中汇总任务级平均延迟、P95延迟和最大延迟 |
+| `latency_bottleneck_analysis` | 延迟阻塞归因，用来把慢因拆成真实外部API、本地运行和mock占位三类 |
+| `real_api_slow_tasks` | 真实外部API慢任务列表，用来判断哪些真实网络调用超过当前P95目标 |
+| `local_runtime_slow_tasks` | 本地运行慢任务列表，用来判断哪些慢因来自本机PaddleOCR等本地推理链路 |
+| `mock_latency_unusable_tasks` | mock延迟不可用任务列表，用来提醒这些延迟不能作为真实供应商性能证据 |
+| `task_latency_targets_ms` | 任务级P95延迟目标，用来给 OCR、视觉理解、文本分析等不同耗时结构的任务设置不同闸门 |
+| `task_latency_target_checks` | 任务级延迟检查明细，用来说明每个当前预期任务的历史P95、目标P95、证据口径和状态 |
+| `task_latency_target_summary` | 任务级延迟检查汇总，用来判断当前批次是否存在任务级延迟硬阻塞或mock证据风险 |
 | `expected_units_by_task` | 各任务的预估计量单位，用来把单位价格转换成整批预算估算 |
 | `historical_p95_latency_by_task_ms` | 各任务的历史P95延迟，用来判断运行前延迟约束是否可能失败 |
 | `current_route` | 当前每个任务类型对应的供应商和模型，用来核对批处理真正会走哪条模型路线 |
@@ -453,14 +615,63 @@ output/batch_failure_demo_20260721_190052
 - 文本主分类评估可以读取真实 DeepSeek 文本分析结果，并与人工标准答案比较。
 - 图片文件在显式选择 `paddleocr` 后，可以使用本地 PaddleOCR 生成真实 `ocr_text` 并计算分段质量指标。
 - RapidOCR 已作为本地OCR候选在三张关键帧上完成对照评估，但未接入主流水线。
+- 图片视觉理解已实现 Qwen-VL 受保护 API 入口，并已生成 `output/batch_qwen_vl_response_model_check/` 单图真实批次结果；视频 V1 也已生成一次 Qwen-VL 5关键帧真实试跑，结果是4帧成功、1帧网络失败。当前代码已补充关键帧级受控重试，但尚需复测，不证明多图或视频稳定质量。
 
 当前 mock 或占位部分包括：
 
 | 任务 | 当前状态 | 说明 |
 |---|---|---|
 | 图片 OCR | 默认 mock / 可选本地 PaddleOCR | 默认返回模拟文字；显式选择 `paddleocr` 后已有五张正式图片真实评估；RapidOCR只做候选评估，未接入主流程 |
-| 视频 OCR | mock | 视频关键帧预处理仍是占位，因此视频 OCR 不能写成本地 PaddleOCR 真实推理 |
-| 视觉理解 | mock | 返回模拟视觉描述，不是真实图像理解 |
-| 语音识别 | mock | 返回模拟音频转写，不是真实音频识别 |
-| 视频预处理 | 占位 | 用于跑通关键帧和音频链路，不代表完整视频理解 |
+| 视频 OCR | 默认 mock / 可选本地 PaddleOCR | 当前代码可把视频 V1 抽出的最多 5 张关键帧交给 PaddleOCR；历史视频 V0 批次仍是 mock 单帧证据，尚未形成视频关键帧真实质量评估 |
+| 图片视觉理解 | 默认 mock / 可选 Qwen-VL API | 默认返回模拟视觉描述；显式选择 `qwen_vl` 且授权后才会调用 Qwen-VL，当前已有 `img_1.png` 单图真实验证，但尚未形成多图质量评估 |
+| 视频视觉理解 | 默认 mock / 可选 Qwen-VL API | 当前代码可把视频 V1 抽出的最多 5 张关键帧交给 Qwen-VL；需要 `--allow-live-api`；支持关键帧级受控重试；已有一次真实试跑但仍需复测可靠性 |
+| 语音识别 | mock | 本地音频文件存在时返回模拟音频转写，不是真实音频识别 |
+| 视频预处理 | 已实现 V1 | 可读取视频元信息并等距抽取最多 5 张关键帧；本机有 ffmpeg 时可抽取 wav 音频，缺少依赖或提取失败时会记录明确状态 |
 | 多供应商动态路由 | 未实现 | 目前按任务类型固定路由，不按成本、延迟或质量动态选择 |
+## 成本字段读取口径补充
+
+`batch_report.json` 的 `cost_stats` 中，`total_cost_cny` 表示真实 API 的本地价格表估算成本，用来判断理论预算消耗，不等同供应商后台真实扣费；`recorded_total_cost_cny` 表示所有模型调用记录中的成本合计，可能包含 mock 占位成本；`live_api_cost_cny` 表示真实 API 估算成本；`local_model_cost_cny` 表示本地模型成本；`mock_cost_cny` 表示 mock 占位成本，不能当成供应商真实扣费。
+
+如果一个视频批次同时使用 Qwen-VL、PaddleOCR、mock ASR 和 mock 文本分析，应优先看 `live_api_cost_cny` 和 `cost_by_provider` 判断真实 API 估算成本；`mock_cost_cny` 只用于说明当前流程里还有占位环节。若供应商用免费额度抵扣，后台真实扣费可能为 0，需要成本对账报告单独记录。
+## `results_readable.md` 证据块说明
+
+新生成的 `results_readable.md` 会在文件级摘要后展开关键证据原文：`raw_text` 表示文本原文；`ocr_text` 表示 OCR 识别文字；`visual_description` 表示视觉理解模型生成的画面描述；`audio_transcript` 表示音频转写文字。这样人工评判视频结果时，可以直接对照逐帧 OCR 和逐帧视觉描述，不必先打开 `results.jsonl`。
+
+注意：如果某个字段来自 mock，例如当前视频批次中的 `audio_transcript`，它只能说明流程占位，不代表真实音频识别能力。
+## 视频分类人工评判基准
+
+四视频批次的视觉证据可以在 `output/batch_video_qwen_vl_4videos_review/results_readable.md` 中人工检查。当前已把用户确认的三个分类边界样本记录到 `evaluation/video_topic_gold.csv`：`例子.mp4` 的正确主分类是 `other`；`例子2.mp4` 的正确主分类是 `technology` 且不应加入 `entertainment` 副分类；`例子3.mp4` 的正确主分类是 `finance_business` 且不应加入 `technology` 副分类。
+
+注意：该批次的 `topic` 和 `secondary_topics` 来自 mock 文本分析，不能作为真实分类质量结论。后续如果要评估分类质量，应基于已有 OCR 和 Qwen-VL 证据单独授权真实文本分析回归。
+
+## 只重跑 DeepSeek 文本分析层
+
+如果已经有一批视频结果包含 OCR 和 Qwen-VL 视觉理解证据，但最终分类来自 mock 文本分析，可以不重新跑 OCR、Qwen-VL 或视频预处理，只复用已有证据重跑 DeepSeek 文本分析层。
+
+推荐命令：
+
+```powershell
+.\.venv\Scripts\python.exe .\src\reanalyze_batch_text.py --source-batch-dir .\output\batch_video_qwen_vl_4videos_review --batch-id batch_video_deepseek_text_reanalysis_review --allow-live-api --max-api-retries 1
+```
+
+如果只想补跑某个失败文件，可以加 `--include-files`：
+
+```powershell
+.\.venv\Scripts\python.exe .\src\reanalyze_batch_text.py --source-batch-dir .\output\batch_video_qwen_vl_4videos_review --batch-id batch_video_deepseek_text_reanalysis_file0001_retry --include-files 例子.mp4 --allow-live-api --max-api-retries 1
+```
+
+这条命令会读取源批次的 `results.jsonl`。其中 `results.jsonl` 是文件级结果文件，用于保存每个文件的分类、摘要、证据和状态；`ocr_text` 是历史 OCR 文字证据；`visual_description` 是历史视觉理解证据；`audio_transcript` 是音频转写证据，本入口会主动丢弃 mock 音频转写，不把它当成真实证据。新批次会写入 `source_batch_id`，用于说明本次重分析复用了哪个历史批次。
+
+新输出批次会生成：
+
+| 文件 | 含义与作用 |
+|---|---|
+| `results_readable.md` | 人工可读结果，用于检查 DeepSeek 重分析后的 `topic`、`secondary_topics`、`tags`、`summary` 和证据边界 |
+| `results.jsonl` | 机器可读文件级结果，用于后续评估或导入 |
+| `model_calls.jsonl` | 本轮 DeepSeek 文本分析调用记录；不包含历史 OCR 或 Qwen-VL 调用 |
+| `batch_report.json` | 本轮 DeepSeek 文本分析的成本、延迟和成功率汇总 |
+| `errors.jsonl` | 本轮失败记录；无失败时为空 |
+
+字段说明：`batch_id` 是新重分析批次编号；`source_batch_id` 是被复用的历史批次编号；`topic` 是主分类；`secondary_topics` 是副分类；`evidence_used` 是实际用于文本分析的证据列表；`missing_evidence` 是缺失证据列表；`processing_status` 是文件级处理状态。由于真实 ASR 尚未接入，视频重分析结果即使 DeepSeek 成功，也可能保持 `partial_success`，表示结果基于 OCR 和视觉理解证据，但缺少真实音频证据。
+
+如果启用 `--max-api-retries 1` 后发生第一次失败、第二次成功，`model_calls.jsonl` 会保留两条调用记录，`call_ids` 也会同时关联两次尝试，便于追踪重试成本和延迟。

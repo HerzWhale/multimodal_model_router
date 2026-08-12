@@ -20,6 +20,10 @@ policies:
   balanced:
     budget_limit_cny:
     p95_latency_limit_ms: 3500
+    task_latency_targets_ms:
+      ocr: 60000
+      visual_understanding: 3500
+      text_analysis: 8000
     min_real_coverage_rate: 0.40
 
 budget_expansion_multipliers:
@@ -30,5 +34,6 @@ budget_expansion_multipliers:
 notes:
   - "budget_limit_cny 为空时，默认使用 batch_report.json 中记录的批次预算。"
   - "p95_latency_limit_ms 为空时，该策略不强制判断 P95 延迟约束。"
+  - "task_latency_targets_ms 用于给不同任务配置不同 P95 延迟目标；当前 balanced 策略中的 OCR 目标是受控本地CPU试跑阈值，不是生产SLA。"
   - "min_real_coverage_rate 表示真实模型调用占全部模型调用的最低比例。"
   - "本配置只影响离线策略模拟，不会触发真实模型 API。"

@@ -18,6 +18,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from main import main as cli_main
+from main import _build_backend_runtime_summary
 from main import run_batch
 
 
@@ -49,6 +50,7 @@ class MainTest(unittest.TestCase):
         *,
         backend: str,
         ocr_backend: str = "mock",
+        vision_backend: str = "mock",
     ) -> Path:
         """写入主入口测试所需的最小配置。"""
 
@@ -69,14 +71,18 @@ class MainTest(unittest.TestCase):
         settings_path = config_dir / "settings.yaml"
         settings_path.write_text(
             "\n".join(
-                [
-                    "input_dir: input",
-                    "output_dir: output",
-                    f"ocr_backend: {ocr_backend}",
-                    f"text_analysis_backend: {backend}",
-                    "deepseek_api_key_env: TEST_DEEPSEEK_API_KEY",
-                    "default_budget_limit_cny: 50",
-                    "target_output_format: jsonl",
+                    [
+                        "input_dir: input",
+                        "output_dir: output",
+                        f"ocr_backend: {ocr_backend}",
+                        f"vision_understanding_backend: {vision_backend}",
+                        f"text_analysis_backend: {backend}",
+                        "deepseek_api_key_env: TEST_DEEPSEEK_API_KEY",
+                        "deepseek_max_tokens: 1500",
+                        "qwen_vl_api_key_env: TEST_DASHSCOPE_API_KEY",
+                        "qwen_vl_max_tokens: 500",
+                        "default_budget_limit_cny: 50",
+                        "target_output_format: jsonl",
                     "allow_partial_success: true",
                 ]
             ),
@@ -127,13 +133,26 @@ class MainTest(unittest.TestCase):
             self.assertTrue((batch_dir / "batch_report.json").exists())
 
             for file_name in ["results.jsonl", "model_calls.jsonl", "errors.jsonl"]:
-                lines = (batch_dir / file_name).read_text(encoding="utf-8").splitlines()
-                for line in lines:
-                    json.loads(line)
+                records = _read_json_objects(batch_dir / file_name)
+                self.assertIsInstance(records, list)
 
             report = json.loads((batch_dir / "batch_report.json").read_text(encoding="utf-8"))
+            metadata = json.loads((batch_dir / "batch_metadata.json").read_text(encoding="utf-8"))
             self.assertEqual(report["file_stats"]["total_files"], 1)
             self.assertEqual(report["batch_id"], "batch_test")
+            self.assertEqual(metadata["selected_backends"]["ocr_backend"], "mock")
+            self.assertEqual(metadata["selected_backends"]["vision_understanding_backend"], "mock")
+            self.assertEqual(metadata["selected_backends"]["speech_to_text_backend"], "mock")
+            self.assertEqual(metadata["selected_backends"]["text_analysis_backend"], "mock")
+            self.assertEqual(metadata["video_max_keyframes"], 3)
+            self.assertEqual(metadata["request_purpose"], "受控mock批处理验证")
+            self.assertTrue(metadata["backend_runtime_summary"]["contains_mock"])
+            self.assertFalse(metadata["backend_runtime_summary"]["contains_live_api"])
+            self.assertTrue(metadata["cost_estimation"]["contains_mock_estimates"])
+            self.assertEqual(
+                metadata["cost_estimation"]["estimation_error_status"],
+                "unknown_until_bill_reconciliation",
+            )
 
     def test_cli_input_dir_override_keeps_evaluation_separate_from_default_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -232,7 +251,94 @@ class MainTest(unittest.TestCase):
         settings = (PROJECT_ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
 
         self.assertIn("ocr_backend: mock", settings)
+        self.assertIn("vision_understanding_backend: mock", settings)
         self.assertIn("text_analysis_backend: mock", settings)
+
+    def test_backend_runtime_summary_distinguishes_live_local_and_mock_calls(self) -> None:
+        model_calls = [
+            {
+                "task_type": "ocr",
+                "provider": "doubao",
+                "model_name": "mock-ocr",
+                "response_model_name": None,
+            },
+            {
+                "task_type": "ocr",
+                "provider": "paddlepaddle",
+                "model_name": "PP-OCRv5_mobile",
+                "response_model_name": None,
+            },
+            {
+                "task_type": "visual_understanding",
+                "provider": "qwen",
+                "model_name": "qwen-vl-plus",
+                "response_model_name": "qwen-vl-plus",
+            },
+        ]
+
+        summary = _build_backend_runtime_summary(model_calls)
+        runtime_types = {
+            item["runtime_type"]
+            for item in summary["model_call_runtime_breakdown"]
+        }
+        qwen_items = [
+            item
+            for item in summary["model_call_runtime_breakdown"]
+            if item["model_name"] == "qwen-vl-plus"
+        ]
+
+        self.assertTrue(summary["contains_live_api"])
+        self.assertTrue(summary["contains_local_model"])
+        self.assertTrue(summary["contains_mock"])
+        self.assertEqual(runtime_types, {"live_api", "local_model", "mock"})
+        self.assertEqual(qwen_items[0]["response_model_name"], "qwen-vl-plus")
+
+    @patch("main.run_file_pipeline")
+    def test_run_batch_passes_generation_limits_from_settings(self, mock_pipeline) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings_path = self._write_settings(root, backend="deepseek", vision_backend="qwen_vl")
+            settings_text = settings_path.read_text(encoding="utf-8")
+            settings_path.write_text(
+                settings_text.replace("deepseek_max_tokens: 1500", "deepseek_max_tokens: 3000")
+                .replace("qwen_vl_max_tokens: 500", "qwen_vl_max_tokens: 700"),
+                encoding="utf-8",
+            )
+            mock_pipeline.return_value = {
+                "result": {
+                    "schema_version": "v1",
+                    "batch_id": "batch_limits",
+                    "file_id": "file_001",
+                    "file_name": "demo.txt",
+                    "media_type": "text",
+                    "processing_status": "success",
+                    "processing_cost_cny": 0,
+                    "processing_time_ms": 0,
+                    "quality_flags": [],
+                    "warning_messages": [],
+                    "models_used": [],
+                },
+                "model_calls": [],
+                "errors": [],
+            }
+            original_deepseek_key = os.environ.get("TEST_DEEPSEEK_API_KEY")
+            original_dashscope_key = os.environ.get("TEST_DASHSCOPE_API_KEY")
+            os.environ["TEST_DEEPSEEK_API_KEY"] = "test-deepseek"
+            os.environ["TEST_DASHSCOPE_API_KEY"] = "test-dashscope"
+            try:
+                run_batch(settings_path=settings_path, allow_live_api=True, batch_id="batch_limits")
+            finally:
+                if original_deepseek_key is None:
+                    os.environ.pop("TEST_DEEPSEEK_API_KEY", None)
+                else:
+                    os.environ["TEST_DEEPSEEK_API_KEY"] = original_deepseek_key
+                if original_dashscope_key is None:
+                    os.environ.pop("TEST_DASHSCOPE_API_KEY", None)
+                else:
+                    os.environ["TEST_DASHSCOPE_API_KEY"] = original_dashscope_key
+
+        self.assertEqual(mock_pipeline.call_args.kwargs["deepseek_max_tokens"], 3000)
+        self.assertEqual(mock_pipeline.call_args.kwargs["qwen_vl_max_tokens"], 700)
 
     def test_run_batch_rejects_deepseek_without_live_permission(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -240,6 +346,28 @@ class MainTest(unittest.TestCase):
 
             with self.assertRaisesRegex(PermissionError, "--allow-live-api"):
                 run_batch(settings_path=settings_path, batch_id="batch_live_blocked")
+
+    def test_run_batch_rejects_qwen_vl_without_live_permission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = self._write_settings(
+                Path(tmp_dir),
+                backend="mock",
+                vision_backend="qwen_vl",
+            )
+
+            with self.assertRaisesRegex(PermissionError, "--allow-live-api"):
+                run_batch(settings_path=settings_path, batch_id="batch_qwen_vl_blocked")
+
+    def test_run_batch_rejects_dashscope_asr_without_live_permission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = self._write_settings(Path(tmp_dir), backend="mock")
+
+            with self.assertRaisesRegex(PermissionError, "--allow-live-api"):
+                run_batch(
+                    settings_path=settings_path,
+                    speech_to_text_backend_override="dashscope_asr",
+                    batch_id="batch_asr_blocked",
+                )
 
     @patch("main._ensure_paddleocr_runtime_available")
     def test_run_batch_allows_paddleocr_without_live_permission(self, mock_runtime_check) -> None:
@@ -264,7 +392,7 @@ class MainTest(unittest.TestCase):
                 exit_code = cli_main(["--settings", str(settings_path), "--allow-live-api"])
 
             self.assertEqual(exit_code, 2)
-            self.assertIn("必须与 --text-analysis-backend deepseek 同时使用", stdout.getvalue())
+            self.assertIn("--speech-backend dashscope_asr", stdout.getvalue())
             self.assertFalse((Path(tmp_dir) / "output").exists())
 
     @patch("main.run_batch")
@@ -293,6 +421,36 @@ class MainTest(unittest.TestCase):
         self.assertEqual(call_kwargs["include_file_names"], ["img_7.jpg", "img_8.jpg", "img_9.jpg"])
 
     @patch("main.run_batch")
+    def test_cli_ffmpeg_path_passes_explicit_path(self, mock_run_batch) -> None:
+        mock_run_batch.return_value = {"batch_id": "batch_safe"}
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            exit_code = cli_main(["--ffmpeg-path", "D:\\tools\\ffmpeg\\bin\\ffmpeg.exe"])
+
+        self.assertEqual(exit_code, 0)
+        call_kwargs = mock_run_batch.call_args.kwargs
+        self.assertEqual(call_kwargs["ffmpeg_path"], "D:\\tools\\ffmpeg\\bin\\ffmpeg.exe")
+        self.assertEqual(call_kwargs["max_keyframes"], 3)
+
+    @patch("main.run_batch")
+    def test_cli_max_keyframes_passes_explicit_value(self, mock_run_batch) -> None:
+        mock_run_batch.return_value = {"batch_id": "batch_safe"}
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            exit_code = cli_main(["--max-keyframes", "2"])
+
+        self.assertEqual(exit_code, 0)
+        call_kwargs = mock_run_batch.call_args.kwargs
+        self.assertEqual(call_kwargs["max_keyframes"], 2)
+
+    def test_run_batch_rejects_invalid_max_keyframes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = self._write_settings(Path(tmp_dir), backend="mock")
+
+            with self.assertRaisesRegex(ValueError, "视频关键帧数量必须大于等于 1"):
+                run_batch(settings_path=settings_path, max_keyframes=0)
+
+    @patch("main.run_batch")
     def test_cli_deepseek_keeps_unselected_ocr_backend_mock(self, mock_run_batch) -> None:
         mock_run_batch.return_value = {"batch_id": "batch_safe"}
 
@@ -304,9 +462,23 @@ class MainTest(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         call_kwargs = mock_run_batch.call_args.kwargs
         self.assertEqual(call_kwargs["ocr_backend_override"], "mock")
+        self.assertEqual(call_kwargs["vision_understanding_backend_override"], "mock")
         self.assertEqual(call_kwargs["text_analysis_backend_override"], "deepseek")
 
-    def test_cli_api_retry_requires_explicit_deepseek_backend(self) -> None:
+    @patch("main.run_batch")
+    def test_cli_qwen_vl_keeps_unselected_other_backends_mock(self, mock_run_batch) -> None:
+        mock_run_batch.return_value = {"batch_id": "batch_safe"}
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            exit_code = cli_main(["--vision-backend", "qwen_vl", "--allow-live-api"])
+
+        self.assertEqual(exit_code, 0)
+        call_kwargs = mock_run_batch.call_args.kwargs
+        self.assertEqual(call_kwargs["ocr_backend_override"], "mock")
+        self.assertEqual(call_kwargs["vision_understanding_backend_override"], "qwen_vl")
+        self.assertEqual(call_kwargs["text_analysis_backend_override"], "mock")
+
+    def test_cli_api_retry_requires_explicit_real_backend(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             settings_path = self._write_settings(root, backend="mock")
@@ -323,8 +495,48 @@ class MainTest(unittest.TestCase):
                 )
 
             self.assertEqual(exit_code, 2)
-            self.assertIn("只能与 --text-analysis-backend deepseek 同时使用", stdout.getvalue())
+            self.assertIn("--text-analysis-backend deepseek 或 --vision-backend qwen_vl", stdout.getvalue())
             self.assertFalse((root / "output").exists())
+
+    @patch("main.run_batch")
+    def test_cli_qwen_vl_retry_passes_qwen_retry_only(self, mock_run_batch) -> None:
+        mock_run_batch.return_value = {"batch_id": "batch_safe"}
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            exit_code = cli_main(
+                [
+                    "--vision-backend",
+                    "qwen_vl",
+                    "--allow-live-api",
+                    "--max-api-retries",
+                    "1",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        call_kwargs = mock_run_batch.call_args.kwargs
+        self.assertEqual(call_kwargs["deepseek_max_retries"], 0)
+        self.assertEqual(call_kwargs["qwen_vl_max_retries"], 1)
+
+    @patch("main.run_batch")
+    def test_cli_deepseek_retry_passes_deepseek_retry_only(self, mock_run_batch) -> None:
+        mock_run_batch.return_value = {"batch_id": "batch_safe"}
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            exit_code = cli_main(
+                [
+                    "--text-analysis-backend",
+                    "deepseek",
+                    "--allow-live-api",
+                    "--max-api-retries",
+                    "1",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        call_kwargs = mock_run_batch.call_args.kwargs
+        self.assertEqual(call_kwargs["deepseek_max_retries"], 1)
+        self.assertEqual(call_kwargs["qwen_vl_max_retries"], 0)
 
     def test_run_batch_rejects_more_than_one_api_retry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -335,6 +547,22 @@ class MainTest(unittest.TestCase):
                     settings_path=settings_path,
                     deepseek_max_retries=2,
                     batch_id="batch_retry_invalid",
+                )
+
+    def test_run_batch_rejects_more_than_one_qwen_vl_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = self._write_settings(
+                Path(tmp_dir),
+                backend="mock",
+                vision_backend="qwen_vl",
+            )
+
+            with self.assertRaisesRegex(ValueError, "Qwen-VL 最大重试次数只能是 0 或 1"):
+                run_batch(
+                    settings_path=settings_path,
+                    allow_live_api=True,
+                    qwen_vl_max_retries=2,
+                    batch_id="batch_qwen_retry_invalid",
                 )
 
     def test_deepseek_with_permission_but_without_key_stops_before_output(self) -> None:
@@ -358,6 +586,32 @@ class MainTest(unittest.TestCase):
             finally:
                 if original_api_key is not None:
                     os.environ["TEST_DEEPSEEK_API_KEY"] = original_api_key
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("已在发送网络请求前停止运行", stdout.getvalue())
+            self.assertFalse((root / "output").exists())
+
+    def test_qwen_vl_with_permission_but_without_key_stops_before_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings_path = self._write_settings(root, backend="mock")
+            stdout = io.StringIO()
+            original_api_key = os.environ.pop("TEST_DASHSCOPE_API_KEY", None)
+
+            try:
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = cli_main(
+                        [
+                            "--settings",
+                            str(settings_path),
+                            "--vision-backend",
+                            "qwen_vl",
+                            "--allow-live-api",
+                        ]
+                    )
+            finally:
+                if original_api_key is not None:
+                    os.environ["TEST_DASHSCOPE_API_KEY"] = original_api_key
 
             self.assertEqual(exit_code, 2)
             self.assertIn("已在发送网络请求前停止运行", stdout.getvalue())

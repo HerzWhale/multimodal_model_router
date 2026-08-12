@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
+from report_generator import read_jsonl
 from result_writer import (
     ensure_batch_output_dir,
     write_batch_metadata,
@@ -57,10 +58,11 @@ class ResultWriterTest(unittest.TestCase):
                 ],
             )
             content = path.read_text(encoding="utf-8")
-            lines = content.splitlines()
-            records = [json.loads(line) for line in lines]
+            records = read_jsonl(path)
 
-        self.assertEqual(len(lines), 2)
+        self.assertIn('{\n  "file_id": "file_001"', content)
+        self.assertIn('\n  "tags": [', content)
+        self.assertIn('\n  "models_used": [', content)
         self.assertEqual(len(records), 2)
         self.assertEqual(records[0]["file_id"], "file_001")
         self.assertEqual(records[0]["tags"], ["中文标签", "OCR"])
@@ -93,6 +95,29 @@ class ResultWriterTest(unittest.TestCase):
                         "tags": ["AI"],
                         "summary": "测试摘要",
                         "business_use": "测试用途",
+                        "raw_text": "原始文本证据",
+                        "ocr_text": "关键帧 OCR 文字",
+                        "visual_description": "关键帧视觉描述",
+                        "audio_transcript": "模拟音频转写",
+                        "preprocessing_artifacts": {
+                            "preprocess_status": "success",
+                            "keyframe_count": 1,
+                            "keyframe_extraction_status": "extracted",
+                            "keyframe_sampling_strategy": "start_early_then_spaced",
+                            "max_keyframes": 5,
+                            "keyframe_metadata": [
+                                {
+                                    "frame_index": 1,
+                                    "source_frame_index": 0,
+                                    "timestamp_ms": 0,
+                                    "path": "demo_frame_0001.jpg",
+                                }
+                            ],
+                            "audio_extraction_status": "not_implemented",
+                            "duration_ms": 2000,
+                            "duration_source": "opencv_frame_count_fps",
+                            "warning_messages": ["视频V1尚未实现真实音频提取。"],
+                        },
                         "evidence_used": ["raw_text"],
                         "missing_evidence": [],
                         "call_ids": ["call_001"],
@@ -102,6 +127,7 @@ class ResultWriterTest(unittest.TestCase):
                                 "task_type": "text_analysis",
                                 "provider": "deepseek",
                                 "model_name": "deepseek-v4-flash",
+                                "response_model_name": "deepseek-v4-flash",
                                 "status": "success",
                             }
                         ],
@@ -125,7 +151,20 @@ class ResultWriterTest(unittest.TestCase):
 
             readable_content = (batch_dir / "results_readable.md").read_text(encoding="utf-8")
             self.assertIn("结果 1：file_001 | demo.txt | text", readable_content)
+            self.assertIn("预处理产物：状态=success", readable_content)
+            self.assertIn("关键帧=1", readable_content)
+            self.assertIn("采样策略=start_early_then_spaced", readable_content)
+            self.assertIn("关键帧位置=#1@0ms(frame=0)", readable_content)
             self.assertIn("text_analysis: deepseek/deepseek-v4-flash", readable_content)
+            self.assertIn("响应模型：deepseek-v4-flash", readable_content)
+            self.assertIn("### 原文", readable_content)
+            self.assertIn("原始文本证据", readable_content)
+            self.assertIn("### OCR 文字", readable_content)
+            self.assertIn("关键帧 OCR 文字", readable_content)
+            self.assertIn("### 视觉理解描述", readable_content)
+            self.assertIn("关键帧视觉描述", readable_content)
+            self.assertIn("### 音频转写", readable_content)
+            self.assertIn("模拟音频转写", readable_content)
 
 
 if __name__ == "__main__":

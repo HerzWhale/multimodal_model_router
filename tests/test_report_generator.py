@@ -221,6 +221,91 @@ class ReportGeneratorTest(unittest.TestCase):
         self.assertEqual(report["cost_stats"]["total_cost_cny"], 0.003)
         self.assertEqual(report["latency_stats"]["avg_model_latency_ms"], 850.0)
 
+    def test_cost_stats_separates_live_local_and_mock_costs(self) -> None:
+        report = generate_batch_report(
+            batch_id="batch_cost_scope",
+            results=[
+                {
+                    "file_id": "file_001",
+                    "processing_status": "success",
+                    "quality_flags": [],
+                    "processing_time_ms": 1000,
+                }
+            ],
+            model_calls=[
+                {
+                    "task_type": "visual_understanding",
+                    "provider": "qwen",
+                    "model_name": "qwen-vl-plus",
+                    "cost_cny": 0.005,
+                    "latency_ms": 3000,
+                },
+                {
+                    "task_type": "ocr",
+                    "provider": "paddlepaddle",
+                    "model_name": "PP-OCRv5_mobile",
+                    "cost_cny": 0.0,
+                    "latency_ms": 5000,
+                },
+                {
+                    "task_type": "speech_to_text",
+                    "provider": "doubao",
+                    "model_name": "mock-asr",
+                    "cost_cny": 0.15,
+                    "latency_ms": 0,
+                },
+            ],
+            errors=[],
+            budget_limit_cny=10,
+            generated_at="2026-08-09T14:00:00+08:00",
+        )
+
+        cost_stats = report["cost_stats"]
+        self.assertEqual(cost_stats["total_cost_cny"], 0.005)
+        self.assertEqual(cost_stats["recorded_total_cost_cny"], 0.155)
+        self.assertEqual(cost_stats["live_api_cost_cny"], 0.005)
+        self.assertEqual(cost_stats["local_model_cost_cny"], 0.0)
+        self.assertEqual(cost_stats["mock_cost_cny"], 0.15)
+        self.assertEqual(cost_stats["cost_by_runtime_type"], {"live_api": 0.005, "local_model": 0.0, "mock": 0.15})
+        self.assertEqual(cost_stats["cost_confidence"], "estimated_unreconciled")
+        self.assertFalse(cost_stats["billing_reconciled"])
+        self.assertIn("不等同供应商后台真实扣费", cost_stats["cost_scope_note"])
+        self.assertIn("免费额度抵扣", cost_stats["cost_estimation_note"])
+        self.assertEqual(cost_stats["cost_by_task_type"], {"visual_understanding": 0.005})
+        self.assertEqual(
+            cost_stats["recorded_cost_by_task_type"],
+            {"ocr": 0.0, "speech_to_text": 0.15, "visual_understanding": 0.005},
+        )
+
+    def test_cost_confidence_is_not_applicable_without_live_api_cost(self) -> None:
+        report = generate_batch_report(
+            batch_id="batch_local_only",
+            results=[
+                {
+                    "file_id": "file_001",
+                    "processing_status": "success",
+                    "quality_flags": [],
+                    "processing_time_ms": 1000,
+                }
+            ],
+            model_calls=[
+                {
+                    "task_type": "ocr",
+                    "provider": "paddlepaddle",
+                    "model_name": "PP-OCRv5_mobile",
+                    "cost_cny": 0.0,
+                    "latency_ms": 5000,
+                }
+            ],
+            errors=[],
+            budget_limit_cny=10,
+            generated_at="2026-08-10T12:00:00+08:00",
+        )
+
+        self.assertEqual(report["cost_stats"]["total_cost_cny"], 0.0)
+        self.assertEqual(report["cost_stats"]["cost_confidence"], "not_applicable_no_live_api_cost")
+        self.assertFalse(report["cost_stats"]["billing_reconciled"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from http import client as http_client
 import json
 import sys
 import tempfile
@@ -18,17 +19,25 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from model_clients import (
+    DEFAULT_DEEPSEEK_MAX_TOKENS,
+    DEFAULT_QWEN_VL_MAX_TOKENS,
     DeepSeekAttemptsExhausted,
     PaddleOCRResponseError,
+    QwenVLAttemptsExhausted,
+    QwenVLResponseError,
     TOPIC_VALUES,
     _create_paddleocr_engine,
     _build_deepseek_messages,
+    _build_qwen_vl_messages,
+    dashscope_asr_client,
+    dashscope_upload_local_file,
     deepseek_text_analysis_client,
     mock_asr_client,
     mock_ocr_client,
     mock_text_analysis_client,
     mock_vision_client,
     paddleocr_client,
+    qwen_vl_image_understanding_client,
 )
 
 
@@ -75,12 +84,37 @@ def _analysis_content(
     return json.dumps(data, ensure_ascii=False)
 
 
-def _api_response(content: str) -> _FakeResponse:
+def _api_response(
+    content: str,
+    *,
+    usage: dict[str, int] | None = None,
+    finish_reason: str | None = None,
+    model: str | None = None,
+) -> _FakeResponse:
     """构造包含 token 用量的 DeepSeek API 外层响应。"""
 
     body = {
+        "choices": [{"message": {"content": content}, "finish_reason": finish_reason}],
+        "usage": usage or {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+    }
+    if model:
+        body["model"] = model
+    return _FakeResponse(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+
+
+def _json_response(data: dict) -> _FakeResponse:
+    """构造普通 JSON 响应。"""
+
+    return _FakeResponse(json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
+
+def _qwen_vl_api_response(content: str) -> _FakeResponse:
+    """构造包含 token 用量的 Qwen-VL API 外层响应。"""
+
+    body = {
+        "model": "qwen-vl-plus",
         "choices": [{"message": {"content": content}}],
-        "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        "usage": {"prompt_tokens": 300, "completion_tokens": 80, "total_tokens": 380},
     }
     return _FakeResponse(json.dumps(body, ensure_ascii=False).encode("utf-8"))
 
@@ -208,11 +242,218 @@ class ModelClientsTest(unittest.TestCase):
         self.assertIn("audio_transcript", result)
         self.assertIn("demo.wav", result["audio_transcript"])
 
+    @patch("model_clients.request.urlopen")
+    def test_dashscope_asr_client_reads_transcript_url(self, mock_urlopen) -> None:
+        mock_urlopen.side_effect = [
+            _json_response({"output": {"task_id": "task_001"}}),
+            _json_response(
+                {
+                    "output": {
+                        "task_status": "SUCCEEDED",
+                        "results": [
+                            {
+                                "subtask_status": "SUCCEEDED",
+                                "transcription_url": "https://example.test/transcript.json",
+                            }
+                        ],
+                    },
+                    "usage": {"duration": 2},
+                }
+            ),
+            _json_response({"transcripts": [{"text": "第一句。"}, {"text": "第二句。"}]}),
+        ]
+
+        result = dashscope_asr_client(
+            "https://example.test/demo.wav",
+            api_key="test-key",
+            poll_interval_seconds=0,
+        )
+
+        self.assertEqual(result["audio_transcript"], "第一句。\n第二句。")
+        self.assertEqual(result["_api_usage"], {"duration": 2})
+        self.assertEqual(result["_response_model_name"], "paraformer-v2")
+        self.assertEqual(mock_urlopen.call_count, 3)
+
+    @patch("model_clients.request.urlopen")
+    def test_dashscope_asr_client_accepts_oss_url(self, mock_urlopen) -> None:
+        mock_urlopen.side_effect = [
+            _json_response({"output": {"task_id": "task_001"}}),
+            _json_response(
+                {
+                    "output": {
+                        "task_status": "SUCCEEDED",
+                        "results": [
+                            {
+                                "subtask_status": "SUCCEEDED",
+                                "transcription_url": "https://example.test/transcript.json",
+                            }
+                        ],
+                    },
+                    "usage": {"duration": 2},
+                }
+            ),
+            _json_response({"text": "转写成功。"}),
+        ]
+
+        result = dashscope_asr_client(
+            "oss://dashscope-test/demo.wav",
+            api_key="test-key",
+            poll_interval_seconds=0,
+        )
+
+        submit_request = mock_urlopen.call_args_list[0].args[0]
+        headers = {key.lower(): value for key, value in submit_request.header_items()}
+        self.assertEqual(result["audio_transcript"], "转写成功。")
+        self.assertEqual(headers["x-dashscope-ossresourceresolve"], "enable")
+
+    @patch("dashscope.utils.oss_utils.OssUtils.upload")
+    def test_dashscope_upload_local_file_reads_oss_url(self, mock_upload) -> None:
+        mock_upload.return_value = ("oss://dashscope-test/demo.wav", {"policy": "fake"})
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio_path = Path(tmp_dir) / "demo.wav"
+            audio_path.write_bytes(b"fake-wav")
+
+            result = dashscope_upload_local_file(audio_path, api_key="test-key")
+
+        self.assertEqual(result, "oss://dashscope-test/demo.wav")
+        mock_upload.assert_called_once()
+        self.assertEqual(mock_upload.call_args.kwargs["model"], "paraformer-v2")
+        self.assertEqual(mock_upload.call_args.kwargs["api_key"], "test-key")
+
+    @patch("dashscope.utils.oss_utils.OssUtils.upload")
+    def test_dashscope_upload_local_file_reports_sdk_error_without_api_key(self, mock_upload) -> None:
+        mock_upload.side_effect = RuntimeError("bad key test-key-secret")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            audio_path = Path(tmp_dir) / "demo.wav"
+            audio_path.write_bytes(b"fake-wav")
+
+            with self.assertRaisesRegex(Exception, "bad key \\*\\*\\*-secret"):
+                dashscope_upload_local_file(audio_path, api_key="test-key")
+
     def test_mock_vision_client(self) -> None:
         result = mock_vision_client("frame.jpg")
 
         self.assertIn("visual_description", result)
         self.assertIn("frame.jpg", result["visual_description"])
+
+    def test_qwen_vl_client_requires_api_key(self) -> None:
+        with self.assertRaises(ValueError):
+            qwen_vl_image_understanding_client("demo.png", api_key=None)
+
+    def test_qwen_vl_prompt_uses_base64_image_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "demo.png"
+            image_path.write_bytes(b"image-bytes")
+
+            messages = _build_qwen_vl_messages(image_path)
+
+        image_part = messages[1]["content"][0]
+        text_part = messages[1]["content"][1]
+        self.assertEqual(image_part["type"], "image_url")
+        self.assertTrue(image_part["image_url"]["url"].startswith("data:image/png;base64,"))
+        self.assertIn("visual_description", text_part["text"])
+
+    @patch("model_clients.request.urlopen")
+    def test_qwen_vl_client_parses_valid_json_and_usage(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _qwen_vl_api_response(
+            json.dumps({"visual_description": "图片展示一张内容平台信息图。"}, ensure_ascii=False)
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "demo.png"
+            image_path.write_bytes(b"image-bytes")
+            result = qwen_vl_image_understanding_client(
+                image_path,
+                api_key="test-key",
+                model_name="qwen-vl-plus",
+            )
+
+        api_request = mock_urlopen.call_args.args[0]
+        payload = json.loads(api_request.data.decode("utf-8"))
+        image_url = payload["messages"][1]["content"][0]["image_url"]["url"]
+
+        self.assertEqual(result["visual_description"], "图片展示一张内容平台信息图。")
+        self.assertEqual(result["_api_usage"]["total_tokens"], 380)
+        self.assertEqual(result["_response_model_name"], "qwen-vl-plus")
+        self.assertEqual([item["status"] for item in result["_api_attempts"]], ["success"])
+        self.assertTrue(image_url.startswith("data:image/png;base64,"))
+        self.assertEqual(payload["max_tokens"], DEFAULT_QWEN_VL_MAX_TOKENS)
+
+    @patch("model_clients.request.urlopen")
+    def test_qwen_vl_client_accepts_custom_max_tokens(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _qwen_vl_api_response(
+            json.dumps({"visual_description": "图片展示一张内容平台信息图。"}, ensure_ascii=False)
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "demo.png"
+            image_path.write_bytes(b"image-bytes")
+            qwen_vl_image_understanding_client(image_path, api_key="test-key", max_tokens=321)
+
+        payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(payload["max_tokens"], 321)
+
+    def test_qwen_vl_client_rejects_invalid_max_tokens_before_request(self) -> None:
+        with self.assertRaisesRegex(ValueError, "max_tokens"):
+            qwen_vl_image_understanding_client("missing.png", api_key="test-key", max_tokens=0)
+
+    @patch("model_clients.request.urlopen")
+    def test_qwen_vl_client_rejects_invalid_json_content(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _qwen_vl_api_response("不是 JSON")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "demo.png"
+            image_path.write_bytes(b"image-bytes")
+            with self.assertRaisesRegex(QwenVLResponseError, "qwen_vl_content_invalid_json"):
+                qwen_vl_image_understanding_client(image_path, api_key="test-key")
+
+    @patch("model_clients.request.urlopen")
+    def test_qwen_vl_client_retries_remote_disconnected_once_then_succeeds(self, mock_urlopen) -> None:
+        mock_urlopen.side_effect = [
+            http_client.RemoteDisconnected("Remote end closed connection without response"),
+            _qwen_vl_api_response(
+                json.dumps({"visual_description": "关键帧展示内容平台短视频画面。"}, ensure_ascii=False)
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "frame.jpg"
+            image_path.write_bytes(b"image-bytes")
+            result = qwen_vl_image_understanding_client(
+                image_path,
+                api_key="test-key",
+                max_retries=1,
+            )
+
+        self.assertEqual(result["visual_description"], "关键帧展示内容平台短视频画面。")
+        self.assertEqual([item["status"] for item in result["_api_attempts"]], ["failed", "success"])
+        self.assertIn("qwen_vl_network_disconnected", result["_api_attempts"][0]["error_message"])
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("model_clients.request.urlopen")
+    def test_qwen_vl_client_does_not_retry_authentication_error(self, mock_urlopen) -> None:
+        mock_urlopen.side_effect = error.HTTPError(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            401,
+            "Unauthorized",
+            None,
+            io.BytesIO(b"secret detail"),
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "frame.jpg"
+            image_path.write_bytes(b"image-bytes")
+            with self.assertRaises(QwenVLAttemptsExhausted) as context:
+                qwen_vl_image_understanding_client(
+                    image_path,
+                    api_key="test-key",
+                    max_retries=1,
+                )
+
+        self.assertIn("HTTP 401", str(context.exception))
+        self.assertNotIn("secret detail", str(context.exception))
+        self.assertEqual(len(context.exception.attempts), 1)
+        self.assertEqual(mock_urlopen.call_count, 1)
 
     def test_mock_text_analysis_client(self) -> None:
         result = mock_text_analysis_client({"raw_text": "这是一段 AI 工具教程"})
@@ -248,6 +489,21 @@ class ModelClientsTest(unittest.TestCase):
         self.assertEqual(result["topic"], "technology")
         self.assertEqual(result["_api_usage"]["total_tokens"], 150)
         self.assertEqual([item["status"] for item in result["_api_attempts"]], ["success"])
+        sent_payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(sent_payload["max_tokens"], DEFAULT_DEEPSEEK_MAX_TOKENS)
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_accepts_custom_max_tokens(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _api_response(_analysis_content())
+
+        deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key", max_tokens=3000)
+
+        sent_payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(sent_payload["max_tokens"], 3000)
+
+    def test_deepseek_client_rejects_invalid_max_tokens_before_request(self) -> None:
+        with self.assertRaisesRegex(ValueError, "max_tokens"):
+            deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key", max_tokens=0)
 
     @patch("model_clients.request.urlopen")
     def test_deepseek_client_accepts_complete_json_code_fence(self, mock_urlopen) -> None:
@@ -280,6 +536,35 @@ class ModelClientsTest(unittest.TestCase):
         self.assertIn("deepseek_content_empty", str(context.exception))
 
     @patch("model_clients.request.urlopen")
+    def test_deepseek_client_records_diagnostics_when_empty_content_hits_max_tokens(
+        self,
+        mock_urlopen,
+    ) -> None:
+        mock_urlopen.return_value = _api_response(
+            "   \n\t",
+            usage={"prompt_tokens": 1091, "completion_tokens": DEFAULT_DEEPSEEK_MAX_TOKENS, "total_tokens": 2591},
+            finish_reason="length",
+            model="deepseek-v4-flash",
+        )
+
+        with self.assertRaises(DeepSeekAttemptsExhausted) as context:
+            deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key")
+
+        attempt = context.exception.attempts[0]
+        diagnostics = attempt["response_diagnostics"]
+        self.assertIn("max_tokens", str(context.exception))
+        self.assertEqual(attempt["api_usage"]["completion_tokens"], DEFAULT_DEEPSEEK_MAX_TOKENS)
+        self.assertEqual(diagnostics["response_model_name"], "deepseek-v4-flash")
+        self.assertEqual(diagnostics["finish_reason"], "length")
+        self.assertEqual(diagnostics["raw_content_length"], 5)
+        self.assertEqual(diagnostics["stripped_content_length"], 0)
+        self.assertEqual(diagnostics["completion_tokens"], DEFAULT_DEEPSEEK_MAX_TOKENS)
+        self.assertEqual(diagnostics["max_tokens"], DEFAULT_DEEPSEEK_MAX_TOKENS)
+        self.assertTrue(diagnostics["hit_max_tokens"])
+        self.assertIn("content", diagnostics["message_keys"])
+        self.assertEqual(diagnostics["content_preview"], "   \\n\\t")
+
+    @patch("model_clients.request.urlopen")
     def test_deepseek_client_retries_once_then_succeeds(self, mock_urlopen) -> None:
         mock_urlopen.side_effect = [
             _api_response("不是 JSON"),
@@ -294,6 +579,31 @@ class ModelClientsTest(unittest.TestCase):
 
         self.assertEqual([item["status"] for item in result["_api_attempts"]], ["failed", "success"])
         self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_compacts_prompt_after_empty_max_tokens(self, mock_urlopen) -> None:
+        mock_urlopen.side_effect = [
+            _api_response(
+                "   ",
+                usage={"prompt_tokens": 1000, "completion_tokens": DEFAULT_DEEPSEEK_MAX_TOKENS, "total_tokens": 2500},
+                finish_reason="length",
+            ),
+            _api_response(_analysis_content()),
+        ]
+
+        result = deepseek_text_analysis_client(
+            {"visual_description": "前几秒有效内容。" * 200},
+            api_key="test-key",
+            max_retries=1,
+        )
+
+        first_payload = json.loads(mock_urlopen.call_args_list[0].args[0].data.decode("utf-8"))
+        second_payload = json.loads(mock_urlopen.call_args_list[1].args[0].data.decode("utf-8"))
+        self.assertEqual(result["topic"], "technology")
+        self.assertEqual([item["status"] for item in result["_api_attempts"]], ["failed", "success"])
+        self.assertNotIn("失败重试要求", first_payload["messages"][0]["content"])
+        self.assertIn("失败重试要求", second_payload["messages"][0]["content"])
+        self.assertIn("……", second_payload["messages"][1]["content"])
 
     @patch("model_clients.request.urlopen")
     def test_deepseek_client_does_not_retry_authentication_error(self, mock_urlopen) -> None:
@@ -334,7 +644,7 @@ class ModelClientsTest(unittest.TestCase):
             deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key")
 
         self.assertIn("deepseek_content_invalid_schema", str(context.exception))
-        self.assertIn("topic 不属于既定九类", str(context.exception))
+        self.assertIn("topic 不属于既定分类", str(context.exception))
 
     def test_deepseek_prompt_prefers_business_context_over_tech_terms(self) -> None:
         messages = _build_deepseek_messages(
@@ -350,27 +660,72 @@ class ModelClientsTest(unittest.TestCase):
         self.assertIn("功能发布、技术教程、产品能力或工程实现为核心", system_prompt)
 
     def test_deepseek_prompt_contains_complete_topic_policy(self) -> None:
-        """检查真实模型提示词实现已经确认的九类主分类规则。"""
+        """检查真实模型提示词实现已经确认的主分类规则。"""
 
         messages = _build_deepseek_messages({"raw_text": "用于检查提示词规则。"})
         system_prompt = messages[0]["content"]
 
         expected_policy_fragments = [
-            "1. ads_marketing：明确品牌广告",
+            "1. ads_marketing：内容整体以品牌广告",
             "2. news：以报道具体事件为核心",
             "3. finance_business：财经分析",
             "4. technology：以 AI、数码、软件、硬件、汽车科技",
-            "5. sports_health：以体育赛事、运动、健身",
-            "6. entertainment：以影视、综艺、明星、游戏",
-            "7. lifestyle：以个人经历、vlog、自拍、美食、旅行、穿搭",
-            "8. knowledge：面向一般受众解释可迁移的概念",
-            "9. other：以上八类都不符合时使用",
+            "5. gaming：以游戏玩法、剧情、主播实况",
+            "6. sports_health：以体育赛事、运动、健身",
+            "7. entertainment：以娱乐圈、影视作品、综艺节目、明星艺人、粉丝互动、演唱会、线下见面会",
+            "8. humor：以搞笑段子、生活趣事、意外反转",
+            "9. lifestyle：以个人经历、vlog、自拍、美食、旅行、穿搭",
+            "10. knowledge：面向一般受众解释可迁移的概念",
+            "11. other：以上十类都不符合时使用",
             "领域优先于讲解形式",
+            "secondary_topics 也必须遵守领域优先规则",
+            "不能只因为内容采用讲解、教程、科普或历史梳理形式",
             "不要为了避免 other 而强行选择相邻类别",
         ]
 
         for fragment in expected_policy_fragments:
             self.assertIn(fragment, system_prompt)
+
+    def test_deepseek_prompt_handles_video_secondary_topic_boundaries(self) -> None:
+        """检查视频证据中的背景词不会被误当成主分类或副分类。"""
+
+        messages = _build_deepseek_messages({"visual_description": "用于检查视频分类边界规则。"})
+        system_prompt = messages[0]["content"]
+
+        expected_policy_fragments = [
+            "secondary_topics 必须是内容实质讨论对象",
+            "平台界面、搜索页、点赞评论数据、测试工具名、背景道具或单个对象词",
+            "游戏如果只是手机、芯片或设备性能测试的负载，不应加入 gaming 或 entertainment",
+            "手机屏幕、应用界面、搜索页、二维码、点赞评论数、播放控件等平台 UI 证据",
+            "普通音乐、合唱、校园晚会、舞台记录或线下演出片段",
+            "secondary_topics 也不要填 entertainment",
+            "突发趣事、滑稽反转或搞笑效果",
+            "topic 应选择 humor",
+        ]
+
+        for fragment in expected_policy_fragments:
+            self.assertIn(fragment, system_prompt)
+
+        for file_name in ["例子.mp4", "例子2.mp4", "例子3.mp4"]:
+            self.assertNotIn(file_name, system_prompt)
+
+    def test_deepseek_prompt_handles_ads_and_entertainment_boundaries(self) -> None:
+        messages = _build_deepseek_messages({"visual_description": "用于检查广告植入和娱乐活动边界。"})
+        system_prompt = messages[0]["content"]
+
+        self.assertIn("仅在长视频或评论内容中插入一段口播广告", system_prompt)
+        self.assertIn("不应把整条内容主分类改为 ads_marketing", system_prompt)
+        self.assertIn("明星艺人、粉丝互动、演唱会、线下见面会、舞台活动", system_prompt)
+        self.assertIn("即使中间出现广告植入，也不应让 ads_marketing 覆盖主体分类", system_prompt)
+
+    def test_deepseek_prompt_keeps_plain_ceremony_record_out_of_knowledge(self) -> None:
+        messages = _build_deepseek_messages({"visual_description": "用于检查普通民俗婚礼现场记录边界。"})
+        system_prompt = messages[0]["content"]
+
+        self.assertIn("仅记录某个民俗、婚礼、活动、仪式或现场片段", system_prompt)
+        self.assertIn("不应因为出现“传统”“习俗”“文化”等词就归为 knowledge", system_prompt)
+        self.assertIn("普通仪式记录或缺少实质信息增量的现场片段", system_prompt)
+        self.assertNotIn("抖音2026810-211642", system_prompt)
 
     def test_deepseek_prompt_does_not_copy_evaluation_answers(self) -> None:
         """检查提示词使用通用边界规则，而不是复制现有错例答案。"""

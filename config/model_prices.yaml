@@ -3,26 +3,69 @@ models:
     provider: doubao
     pricing_unit: image_count
     price_cny_per_unit: 0.01
+    price_source: local_mock_assumption
+    price_updated_at: '2026-08-01'
+    price_confidence: mock_only
   PP-OCRv5_mobile:
     provider: paddlepaddle
     pricing_unit: image_count
     price_cny_per_unit: 0.0
+    price_source: local_runtime_assumption
+    price_updated_at: '2026-08-01'
+    price_confidence: local_external_api_zero
   mock-asr:
     provider: doubao
     pricing_unit: audio_seconds
     price_cny_per_unit: 0.0005
+    price_source: local_mock_assumption
+    price_updated_at: '2026-08-01'
+    price_confidence: mock_only
+  paraformer-v2:
+    provider: dashscope
+    pricing_unit: audio_seconds
+    price_cny_per_unit: 0.00008
+    price_source: official_public_price_page
+    price_updated_at: '2026-08-09'
+    price_confidence: official_public_page_needs_billing_reconciliation
   mock-vision:
     provider: qwen
     pricing_unit: frame_count
     price_cny_per_unit: 0.01
+    price_source: local_mock_assumption
+    price_updated_at: '2026-08-01'
+    price_confidence: mock_only
+  qwen-vl-plus:
+    provider: qwen
+    price_source: official_public_price_page
+    price_updated_at: '2026-08-01'
+    price_confidence: official_public_page
+    price_fetch:
+      enabled: true
+      source_url: https://help.aliyun.com/zh/model-studio/qwen-vl-plus
+      parser: aliyun_qwen_vl_plus
+    pricing_rules:
+    - unit_type: input_tokens
+      price_cny_per_unit: 8.0e-07
+    - unit_type: output_tokens
+      price_cny_per_unit: 2.0e-06
   mock-text:
     provider: deepseek
     pricing_unit: input_tokens
-    price_cny_per_unit: 0.000002
+    price_cny_per_unit: 2.0e-06
+    price_source: local_mock_assumption
+    price_updated_at: '2026-08-01'
+    price_confidence: mock_only
   deepseek-v4-flash:
     provider: deepseek
+    price_source: official_public_price_page
+    price_updated_at: '2026-08-01'
+    price_confidence: official_public_page
+    price_fetch:
+      enabled: true
+      source_url: https://api-docs.deepseek.com/zh-cn/quick_start/pricing
+      parser: deepseek_v4_flash
     pricing_rules:
-      - unit_type: input_tokens
-        price_cny_per_unit: 0.000001008
-      - unit_type: output_tokens
-        price_cny_per_unit: 0.000002016
+    - unit_type: input_tokens
+      price_cny_per_unit: 1.0e-06
+    - unit_type: output_tokens
+      price_cny_per_unit: 2.0e-06

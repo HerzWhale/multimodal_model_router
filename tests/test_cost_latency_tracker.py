@@ -11,7 +11,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from cost_latency_tracker import build_model_call_record, calculate_cost_cny, load_model_prices
+from cost_latency_tracker import (
+    build_model_call_record,
+    build_price_metadata,
+    calculate_cost_cny,
+    load_model_prices,
+)
 
 
 class CostLatencyTrackerTest(unittest.TestCase):
@@ -22,6 +27,31 @@ class CostLatencyTrackerTest(unittest.TestCase):
 
         self.assertEqual(model_prices["mock-ocr"]["provider"], "doubao")
         self.assertEqual(model_prices["mock-asr"]["pricing_unit"], "audio_seconds")
+        self.assertEqual(model_prices["qwen-vl-plus"]["price_confidence"], "official_public_page")
+
+    def test_build_price_metadata_uses_catalog_values(self) -> None:
+        model_prices = {
+            "qwen-vl-plus": {
+                "price_source": "local_manual_config",
+                "price_updated_at": "2026-08-01",
+                "price_confidence": "unverified_manual_config",
+            }
+        }
+
+        metadata = build_price_metadata("qwen-vl-plus", model_prices)
+
+        self.assertEqual(metadata["cost_estimation_method"], "price_catalog")
+        self.assertEqual(metadata["price_source"], "local_manual_config")
+        self.assertEqual(metadata["price_updated_at"], "2026-08-01")
+        self.assertEqual(metadata["price_confidence"], "unverified_manual_config")
+
+    def test_build_price_metadata_has_safe_defaults(self) -> None:
+        metadata = build_price_metadata("mock-ocr", {"mock-ocr": {"pricing_unit": "image_count"}})
+
+        self.assertEqual(metadata["cost_estimation_method"], "price_catalog")
+        self.assertEqual(metadata["price_source"], "unspecified")
+        self.assertIsNone(metadata["price_updated_at"])
+        self.assertEqual(metadata["price_confidence"], "unknown")
 
     def test_calculate_cost_cny(self) -> None:
         model_prices = {
@@ -89,8 +119,47 @@ class CostLatencyTrackerTest(unittest.TestCase):
         )
 
         self.assertEqual(record["cost_cny"], 0.03)
+        self.assertEqual(record["cost_estimation_method"], "price_catalog")
+        self.assertEqual(record["price_source"], "unspecified")
+        self.assertEqual(record["price_confidence"], "unknown")
         self.assertEqual(record["status"], "success")
         self.assertIsNone(record["error_message"])
+        self.assertNotIn("response_diagnostics", record)
+
+    def test_build_model_call_record_keeps_optional_response_diagnostics(self) -> None:
+        model_prices = {
+            "deepseek-v4-flash": {
+                "pricing_rules": [
+                    {"unit_type": "input_tokens", "price_cny_per_unit": 0.000001},
+                    {"unit_type": "output_tokens", "price_cny_per_unit": 0.000002},
+                ]
+            }
+        }
+
+        record = build_model_call_record(
+            call_id="call_001",
+            batch_id="batch_001",
+            file_id="file_001",
+            task_type="text_analysis",
+            provider="deepseek",
+            model_name="deepseek-v4-flash",
+            input_units=[{"unit_type": "input_tokens", "quantity": 1091}],
+            output_units=[{"unit_type": "output_tokens", "quantity": 800}],
+            latency_ms=9027,
+            started_at="2026-08-02T10:00:00+08:00",
+            status="failed",
+            error_message="[deepseek_content_empty] DeepSeek 模型内容为空。",
+            model_prices=model_prices,
+            response_diagnostics={
+                "finish_reason": "length",
+                "completion_tokens": 800,
+                "max_tokens": 800,
+                "hit_max_tokens": True,
+            },
+        )
+
+        self.assertEqual(record["response_diagnostics"]["finish_reason"], "length")
+        self.assertTrue(record["response_diagnostics"]["hit_max_tokens"])
 
     def test_build_model_call_record_rejects_unknown_status(self) -> None:
         with self.assertRaises(ValueError):

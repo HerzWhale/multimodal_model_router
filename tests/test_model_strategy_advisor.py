@@ -65,15 +65,57 @@ def _model_calls() -> list[dict]:
     ]
 
 
+def _reprice_report() -> dict:
+    """构造成本重算报告。"""
+
+    return {
+        "report_type": "cost_repricing",
+        "reprice_items": [
+            {
+                "call_id": "call_001",
+                "current_estimated_cost_cny": 1.0,
+                "cost_delta_cny": 0.0,
+                "reprice_status": "unchanged",
+                "price_source": "local_mock_assumption",
+                "price_confidence": "mock_only",
+            },
+            {
+                "call_id": "call_002",
+                "current_estimated_cost_cny": 0.25,
+                "cost_delta_cny": -0.25,
+                "reprice_status": "changed",
+                "price_source": "official_public_price_page",
+                "price_confidence": "official_public_page",
+            },
+        ],
+    }
+
+
 class ModelStrategyAdvisorTest(unittest.TestCase):
     def test_cost_summary(self) -> None:
         report = generate_strategy_report(_batch_report(), _model_calls(), generated_at="2026-07-18T10:00:00+08:00")
 
         self.assertEqual(report["batch_overview"]["model_call_count"], 2)
+        self.assertEqual(report["cost_analysis"]["cost_basis"], "historical_recorded")
         self.assertEqual(report["cost_analysis"]["deepseek_cost_cny"], 0.5)
         self.assertEqual(report["cost_analysis"]["mock_cost_cny"], 1.0)
         self.assertAlmostEqual(report["cost_analysis"]["deepseek_cost_share"], 0.333333)
         self.assertTrue(report["cost_analysis"]["mock_cost_counted"])
+
+    def test_cost_summary_can_use_repriced_cost_basis(self) -> None:
+        report = generate_strategy_report(
+            _batch_report(),
+            _model_calls(),
+            reprice_report=_reprice_report(),
+            generated_at="2026-07-18T10:00:00+08:00",
+        )
+
+        self.assertEqual(report["cost_analysis"]["cost_basis"], "current_repriced")
+        self.assertEqual(report["batch_overview"]["total_cost_cny"], 1.25)
+        self.assertEqual(report["batch_overview"]["recorded_total_cost_cny"], 1.5)
+        self.assertEqual(report["cost_analysis"]["deepseek_cost_cny"], 0.25)
+        self.assertEqual(report["cost_analysis"]["changed_call_count"], 1)
+        self.assertEqual(report["source_files"]["cost_reprice_report"], "cost_reprice_report.json")
 
     def test_latency_bottleneck_identification(self) -> None:
         report = generate_strategy_report(_batch_report(), _model_calls(), generated_at="2026-07-18T10:00:00+08:00")
@@ -82,8 +124,46 @@ class ModelStrategyAdvisorTest(unittest.TestCase):
 
         self.assertEqual(slowest["call_id"], "call_002")
         self.assertEqual(slowest["provider"], "deepseek")
-        self.assertIn("DeepSeek", report["latency_analysis"]["current_bottleneck"])
+        self.assertIn("text_analysis", report["latency_analysis"]["current_bottleneck"])
         self.assertIn("P95", report["latency_analysis"]["p95_driver"])
+
+    def test_latency_bottleneck_uses_total_task_latency_not_hardcoded_deepseek(self) -> None:
+        calls = [
+            {
+                "call_id": "call_001",
+                "file_id": "file_001",
+                "task_type": "visual_understanding",
+                "provider": "qwen",
+                "model_name": "qwen-vl-plus",
+                "cost_cny": 0.01,
+                "latency_ms": 20000,
+            },
+            {
+                "call_id": "call_002",
+                "file_id": "file_001",
+                "task_type": "ocr",
+                "provider": "paddlepaddle",
+                "model_name": "PP-OCRv5_mobile",
+                "cost_cny": 0,
+                "latency_ms": 9000,
+            },
+            {
+                "call_id": "call_003",
+                "file_id": "file_001",
+                "task_type": "text_analysis",
+                "provider": "deepseek",
+                "model_name": "deepseek-chat",
+                "cost_cny": 0.002,
+                "latency_ms": 3000,
+            },
+        ]
+
+        report = generate_strategy_report(_batch_report(), calls, generated_at="2026-08-10T12:00:00+08:00")
+        latency_by_task = report["latency_analysis"]["latency_by_task_type"]
+
+        self.assertEqual(latency_by_task[0]["task_type"], "visual_understanding")
+        self.assertEqual(latency_by_task[0]["slowest_provider"], "qwen")
+        self.assertIn("visual_understanding", report["latency_analysis"]["current_bottleneck"])
 
     def test_real_and_mock_boundary(self) -> None:
         report = generate_strategy_report(_batch_report(), _model_calls(), generated_at="2026-07-18T10:00:00+08:00")
@@ -126,10 +206,17 @@ class ModelStrategyAdvisorTest(unittest.TestCase):
                 "\n".join(json.dumps(call, ensure_ascii=False, indent=2) for call in _model_calls()),
                 encoding="utf-8",
             )
+            reprice_path = batch_dir / "cost_reprice_report.json"
+            reprice_path.write_text(json.dumps(_reprice_report(), ensure_ascii=False), encoding="utf-8")
 
-            report = build_strategy_report_from_files(batch_dir, generated_at="2026-07-18T10:00:00+08:00")
+            report = build_strategy_report_from_files(
+                batch_dir,
+                reprice_report_path=reprice_path,
+                generated_at="2026-07-18T10:00:00+08:00",
+            )
 
         self.assertEqual(report["batch_id"], "batch_test")
+        self.assertEqual(report["cost_analysis"]["cost_basis"], "current_repriced")
         self.assertEqual(report["cost_analysis"]["top_cost_tasks"][0]["task_type"], "ocr")
 
     def test_markdown_uses_missing_text_for_absent_values(self) -> None:

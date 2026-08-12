@@ -14,27 +14,48 @@ from typing import Any
 from cost_latency_tracker import build_model_call_record
 from model_clients import (
     DEFAULT_DEEPSEEK_BASE_URL,
+    DEFAULT_DEEPSEEK_MAX_TOKENS,
+    DEFAULT_DASHSCOPE_ASR_MODEL_NAME,
+    DEFAULT_DASHSCOPE_ASR_SUBMIT_URL,
     DEFAULT_PADDLEOCR_MODEL_NAME,
+    DEFAULT_QWEN_VL_BASE_URL,
+    DEFAULT_QWEN_VL_MAX_TOKENS,
+    DEFAULT_QWEN_VL_MODEL_NAME,
     DeepSeekAttemptsExhausted,
+    QwenVLAttemptsExhausted,
+    dashscope_asr_client,
+    dashscope_upload_local_file,
     deepseek_text_analysis_client,
     mock_asr_client,
     mock_ocr_client,
     mock_text_analysis_client,
     mock_vision_client,
     paddleocr_client,
+    qwen_vl_image_understanding_client,
 )
 from model_router import select_model
 from preprocessor import preprocess_file
+from runtime_config import runtime_policy_list, runtime_policy_section
 
 
 LOW_QUALITY_OCR_FLAG = "low_quality_ocr_text"
 LOW_QUALITY_OCR_WARNING = "OCR 返回了非空文字，但文本疑似乱码或过度碎片化，最终分析未把 OCR 文字作为可靠证据。"
-STATUS_AFFECTING_QUALITY_FLAGS = {LOW_QUALITY_OCR_FLAG}
-LOW_QUALITY_OCR_MIN_LINES = 6
-LOW_QUALITY_OCR_MAX_VISIBLE_CHARS = 80
-LOW_QUALITY_OCR_MIN_SHORT_LINE_RATIO = 0.7
-LOW_QUALITY_OCR_MIN_SINGLE_CHAR_LINE_RATIO = 0.25
-LOW_QUALITY_OCR_MIN_ASCII_NOISE_LINE_RATIO = 0.4
+VIDEO_OCR_KEYFRAME_FAILED_FLAG = "video_ocr_keyframe_failed"
+VIDEO_VISUAL_KEYFRAME_FAILED_FLAG = "video_visual_keyframe_failed"
+STATUS_AFFECTING_QUALITY_FLAGS = {
+    LOW_QUALITY_OCR_FLAG,
+    VIDEO_OCR_KEYFRAME_FAILED_FLAG,
+    VIDEO_VISUAL_KEYFRAME_FAILED_FLAG,
+}
+OCR_QUALITY_GATE = runtime_policy_section("ocr_quality_gate")
+ALLOWED_OCR_BACKENDS = runtime_policy_list("runtime_backends", "ocr")
+ALLOWED_VISION_BACKENDS = runtime_policy_list("runtime_backends", "vision_understanding")
+ALLOWED_SPEECH_BACKENDS = runtime_policy_list("runtime_backends", "speech_to_text")
+LOW_QUALITY_OCR_MIN_LINES = int(OCR_QUALITY_GATE.get("min_lines", 6))
+LOW_QUALITY_OCR_MAX_VISIBLE_CHARS = int(OCR_QUALITY_GATE.get("max_visible_chars", 80))
+LOW_QUALITY_OCR_MIN_SHORT_LINE_RATIO = float(OCR_QUALITY_GATE.get("min_short_line_ratio", 0.7))
+LOW_QUALITY_OCR_MIN_SINGLE_CHAR_LINE_RATIO = float(OCR_QUALITY_GATE.get("min_single_char_line_ratio", 0.25))
+LOW_QUALITY_OCR_MIN_ASCII_NOISE_LINE_RATIO = float(OCR_QUALITY_GATE.get("min_ascii_noise_line_ratio", 0.4))
 
 
 def _now_iso() -> str:
@@ -59,6 +80,33 @@ def _output_tokens(text: str) -> list[dict[str, Any]]:
     """把输出文字长度粗略转换为输出 token 数。"""
 
     return [{"unit_type": "output_tokens", "quantity": max(1, len(text) // 2)}]
+
+
+def _video_audio_seconds(preprocessed: dict[str, Any]) -> float:
+    """根据视频预处理结果估算音频秒数；缺少时返回0，避免把未知时长硬算成真实音频用量。"""
+
+    duration_ms = preprocessed.get("duration_ms")
+    if isinstance(duration_ms, (int, float)) and duration_ms > 0:
+        return round(float(duration_ms) / 1000, 6)
+    return 0
+
+
+def _audio_url_for_record(
+    *,
+    file_record: dict[str, Any],
+    audio_path: str | Path,
+    audio_url_map: dict[str, str] | None,
+) -> str | None:
+    """按 file_id、文件名或音频文件名查找远端音频 URL。"""
+
+    if not audio_url_map:
+        return None
+    audio_name = Path(audio_path).name
+    for key in (str(file_record.get("file_id")), str(file_record.get("file_name")), audio_name):
+        value = audio_url_map.get(key)
+        if value:
+            return value
+    return None
 
 
 def _visible_text_length(text: str) -> int:
@@ -116,6 +164,7 @@ def _build_success_call(
     latency_ms: int = 0,
     provider: str | None = None,
     model_name: str | None = None,
+    response_model_name: str | None = None,
 ) -> dict[str, Any]:
     """生成一次成功的模型调用记录。"""
 
@@ -136,6 +185,7 @@ def _build_success_call(
         status="success",
         error_message=None,
         model_prices=model_prices,
+        response_model_name=response_model_name,
     )
 
 
@@ -150,6 +200,8 @@ def _build_failed_text_analysis_call(
     model_prices: dict[str, dict[str, Any]],
     provider: str,
     model_name: str,
+    response_model_name: str | None = None,
+    response_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """生成一次失败的文本分析模型调用记录。"""
 
@@ -167,6 +219,8 @@ def _build_failed_text_analysis_call(
         status="failed",
         error_message=error_message,
         model_prices=model_prices,
+        response_model_name=response_model_name,
+        response_diagnostics=response_diagnostics,
     )
 
 
@@ -183,6 +237,7 @@ def _build_failed_call(
     latency_ms: int = 0,
     provider: str | None = None,
     model_name: str | None = None,
+    response_model_name: str | None = None,
 ) -> dict[str, Any]:
     """生成一次失败的上游模型调用记录。"""
 
@@ -203,6 +258,7 @@ def _build_failed_call(
         status="failed",
         error_message=error_message,
         model_prices=model_prices,
+        response_model_name=response_model_name,
     )
 
 
@@ -226,19 +282,103 @@ def _analysis_output_units(api_usage: dict[str, int], analysis_result: dict[str,
     return _output_tokens(str(analysis_result["summary"]) + str(analysis_result["business_use"]))
 
 
+def _vision_input_units(api_usage: dict[str, int]) -> list[dict[str, Any]]:
+    """优先使用真实视觉 API 返回的输入 token；失败或缺失时记为 0。"""
+
+    return [{"unit_type": "input_tokens", "quantity": int(api_usage.get("prompt_tokens") or 0)}]
+
+
+def _vision_output_units(api_usage: dict[str, int], visual_description: str | None) -> list[dict[str, Any]]:
+    """优先使用真实视觉 API 返回的输出 token；没有时按描述文字粗略估算。"""
+
+    completion_tokens = int(api_usage.get("completion_tokens") or 0)
+    if completion_tokens > 0:
+        return [{"unit_type": "output_tokens", "quantity": completion_tokens}]
+    if not visual_description:
+        return [{"unit_type": "output_tokens", "quantity": 0}]
+    return _output_tokens(visual_description)
+
+
+def _build_qwen_vl_attempt_call(
+    *,
+    attempt: dict[str, Any],
+    call_index: int,
+    file_record: dict[str, Any],
+    visual_description: str | None,
+    routing_rules: dict[str, dict[str, str]],
+    model_prices: dict[str, dict[str, Any]],
+    provider: str,
+    model_name: str,
+) -> dict[str, Any]:
+    """把 Qwen-VL 的单次尝试转换为模型调用记录。"""
+
+    api_usage = attempt.get("api_usage") or {}
+    response_model_name = attempt.get("response_model_name")
+    if attempt.get("status") == "success":
+        return _build_success_call(
+            call_index=call_index,
+            file_record=file_record,
+            task_type="visual_understanding",
+            input_units=_vision_input_units(api_usage),
+            output_units=_vision_output_units(api_usage, visual_description),
+            routing_rules=routing_rules,
+            model_prices=model_prices,
+            latency_ms=int(attempt.get("latency_ms") or 0),
+            provider=provider,
+            model_name=model_name,
+            response_model_name=response_model_name,
+        )
+
+    return _build_failed_call(
+        call_index=call_index,
+        file_record=file_record,
+        task_type="visual_understanding",
+        input_units=_vision_input_units(api_usage),
+        output_units=_vision_output_units(api_usage, None),
+        routing_rules=routing_rules,
+        model_prices=model_prices,
+        error_message=str(attempt.get("error_message") or "Qwen-VL 调用失败。"),
+        latency_ms=int(attempt.get("latency_ms") or 0),
+        provider=provider,
+        model_name=model_name,
+        response_model_name=response_model_name,
+    )
+
+
 def _models_used_from_calls(model_calls: list[dict[str, Any]]) -> list[dict[str, str]]:
     """从模型调用明细中提取文件级模型使用摘要。"""
 
-    return [
-        {
+    models_used = []
+    for call in model_calls:
+        item = {
             "call_id": str(call["call_id"]),
             "task_type": str(call["task_type"]),
             "provider": str(call["provider"]),
             "model_name": str(call["model_name"]),
             "status": str(call["status"]),
         }
-        for call in model_calls
-    ]
+        if call.get("response_model_name"):
+            item["response_model_name"] = str(call["response_model_name"])
+        models_used.append(item)
+    return models_used
+
+
+def _audio_missing_message(preprocessed: dict[str, Any]) -> str:
+    """根据音频提取状态生成缺失音频证据的错误说明。"""
+
+    artifacts = preprocessed.get("preprocessing_artifacts") or {}
+    audio_status = artifacts.get("audio_extraction_status")
+    if audio_status == "dependency_missing":
+        return "本地未找到 ffmpeg，视频音频未提取。"
+    if audio_status == "not_attempted_no_artifact_dir":
+        return "未提供预处理产物目录，视频音频未写出为本地产物。"
+    if audio_status == "timeout":
+        return "ffmpeg 音频提取超时，视频音频未提取。"
+    if audio_status == "empty_output":
+        return "ffmpeg 执行成功但未写出有效音频文件。"
+    if audio_status == "failed":
+        return "视频音频提取失败。"
+    return "视频V1尚未实现真实音频提取。"
 
 
 def run_file_pipeline(
@@ -247,20 +387,44 @@ def run_file_pipeline(
     model_prices: dict[str, dict[str, Any]],
     *,
     ocr_backend: str = "mock",
+    vision_understanding_backend: str = "mock",
+    speech_to_text_backend: str = "mock",
     text_analysis_backend: str = "mock",
     deepseek_api_key: str | None = None,
     deepseek_base_url: str = DEFAULT_DEEPSEEK_BASE_URL,
     deepseek_model_name: str = "deepseek-v4-flash",
     deepseek_max_retries: int = 0,
+    deepseek_max_tokens: int = DEFAULT_DEEPSEEK_MAX_TOKENS,
+    qwen_vl_api_key: str | None = None,
+    qwen_vl_base_url: str = DEFAULT_QWEN_VL_BASE_URL,
+    qwen_vl_model_name: str = DEFAULT_QWEN_VL_MODEL_NAME,
+    qwen_vl_max_retries: int = 0,
+    qwen_vl_max_tokens: int = DEFAULT_QWEN_VL_MAX_TOKENS,
+    dashscope_asr_api_key: str | None = None,
+    dashscope_asr_submit_url: str = DEFAULT_DASHSCOPE_ASR_SUBMIT_URL,
+    dashscope_asr_model_name: str = DEFAULT_DASHSCOPE_ASR_MODEL_NAME,
+    asr_audio_url_map: dict[str, str] | None = None,
+    preprocess_artifact_dir: str | Path | None = None,
+    ffmpeg_path: str | Path | None = None,
+    max_keyframes: int | None = None,
     fault_injection: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """运行单个文件处理流水线；本地 PaddleOCR 当前只用于图片文件。"""
+    """运行单个文件处理流水线；图片和视频关键帧可按配置选择真实上游后端。"""
 
-    if ocr_backend not in {"mock", "paddleocr"}:
+    if ocr_backend not in ALLOWED_OCR_BACKENDS:
         raise ValueError(f"不支持的 OCR 后端: {ocr_backend}")
+    if vision_understanding_backend not in ALLOWED_VISION_BACKENDS:
+        raise ValueError(f"不支持的视觉理解后端: {vision_understanding_backend}")
+    if speech_to_text_backend not in ALLOWED_SPEECH_BACKENDS:
+        raise ValueError(f"不支持的语音识别后端: {speech_to_text_backend}")
     pipeline_started_at = perf_counter()
     injected_failures = fault_injection or {}
-    preprocessed = preprocess_file(file_record)
+    preprocessed = preprocess_file(
+        file_record,
+        artifact_dir=preprocess_artifact_dir,
+        ffmpeg_path=ffmpeg_path,
+        **({"max_keyframes": max_keyframes} if max_keyframes is not None else {}),
+    )
     media_type = file_record["media_type"]
     model_calls: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -306,8 +470,10 @@ def run_file_pipeline(
             model_name=model_name,
         )
         model_calls.append(failed_call)
-        missing_evidence.append(missing_field)
-        quality_flags.append(quality_flag)
+        if missing_field not in missing_evidence:
+            missing_evidence.append(missing_field)
+        if quality_flag not in quality_flags:
+            quality_flags.append(quality_flag)
         warning_messages.append(warning_message)
         errors.append(
             {
@@ -372,84 +538,418 @@ def run_file_pipeline(
                 )
             )
 
+        vision_provider = "qwen" if vision_understanding_backend == "qwen_vl" else None
+        vision_model_name = qwen_vl_model_name if vision_understanding_backend == "qwen_vl" else None
+        vision_started_at = perf_counter()
+        vision_api_usage: dict[str, int] = {}
+        vision_response_model_name: str | None = None
+        vision_api_attempts: list[dict[str, Any]] = []
         if "visual_understanding" in injected_failures:
             record_upstream_failure(
                 task_type="visual_understanding",
                 missing_field="visual_description",
                 quality_flag="visual_understanding_failed",
                 warning_message="视觉理解分支失败，最终分析未使用画面描述证据。",
-                input_units=[{"unit_type": "frame_count", "quantity": 1}],
+                input_units=_vision_input_units(vision_api_usage)
+                if vision_understanding_backend == "qwen_vl"
+                else [{"unit_type": "frame_count", "quantity": 1}],
                 output_units=_output_tokens(""),
+                provider=vision_provider,
+                model_name=vision_model_name,
             )
         else:
-            vision_result = mock_vision_client(image_path)
-            evidence.update(vision_result)
-            evidence_used.append("visual_description")
-            model_calls.append(
-                _build_success_call(
-                    call_index=len(model_calls) + 1,
-                    file_record=file_record,
+            try:
+                if vision_understanding_backend == "qwen_vl":
+                    vision_result = qwen_vl_image_understanding_client(
+                        image_path,
+                        api_key=qwen_vl_api_key,
+                        model_name=qwen_vl_model_name,
+                        base_url=qwen_vl_base_url,
+                        max_retries=qwen_vl_max_retries,
+                        max_tokens=qwen_vl_max_tokens,
+                    )
+                    vision_api_usage = vision_result.pop("_api_usage", {})
+                    vision_response_model_name = vision_result.pop("_response_model_name", None)
+                    vision_api_attempts = vision_result.pop("_api_attempts", [])
+                else:
+                    vision_result = mock_vision_client(image_path)
+            except QwenVLAttemptsExhausted as exc:
+                for attempt in exc.attempts:
+                    failed_call = _build_qwen_vl_attempt_call(
+                        attempt=attempt,
+                        call_index=len(model_calls) + 1,
+                        file_record=file_record,
+                        visual_description=None,
+                        routing_rules=routing_rules,
+                        model_prices=model_prices,
+                        provider=vision_provider or "qwen",
+                        model_name=vision_model_name or qwen_vl_model_name,
+                    )
+                    model_calls.append(failed_call)
+                    errors.append(
+                        {
+                            "batch_id": file_record["batch_id"],
+                            "file_id": file_record["file_id"],
+                            "call_id": failed_call["call_id"],
+                            "error_level": "model_call",
+                            "task_type": "visual_understanding",
+                            "error_message": failed_call["error_message"],
+                        }
+                    )
+                if "visual_description" not in missing_evidence:
+                    missing_evidence.append("visual_description")
+                if "visual_understanding_failed" not in quality_flags:
+                    quality_flags.append("visual_understanding_failed")
+                warning_messages.append("视觉理解分支重试后仍失败，最终分析未使用画面描述证据。")
+            except Exception as exc:
+                record_upstream_failure(
                     task_type="visual_understanding",
-                    input_units=[{"unit_type": "frame_count", "quantity": 1}],
-                    output_units=_output_tokens(vision_result["visual_description"]),
-                    routing_rules=routing_rules,
-                    model_prices=model_prices,
+                    missing_field="visual_description",
+                    quality_flag="visual_understanding_failed",
+                    warning_message="视觉理解分支失败，最终分析未使用画面描述证据。",
+                    input_units=_vision_input_units(vision_api_usage)
+                    if vision_understanding_backend == "qwen_vl"
+                    else [{"unit_type": "frame_count", "quantity": 1}],
+                    output_units=_vision_output_units(vision_api_usage, None)
+                    if vision_understanding_backend == "qwen_vl"
+                    else _output_tokens(""),
+                    error_message=str(exc),
+                    latency_ms=int(round((perf_counter() - vision_started_at) * 1000)),
+                    provider=vision_provider,
+                    model_name=vision_model_name,
                 )
-            )
+            else:
+                evidence.update(vision_result)
+                evidence_used.append("visual_description")
+                if vision_understanding_backend == "qwen_vl" and vision_api_attempts:
+                    for attempt in vision_api_attempts:
+                        attempt_call = _build_qwen_vl_attempt_call(
+                            attempt=attempt,
+                            call_index=len(model_calls) + 1,
+                            file_record=file_record,
+                            visual_description=vision_result["visual_description"],
+                            routing_rules=routing_rules,
+                            model_prices=model_prices,
+                            provider=vision_provider or "qwen",
+                            model_name=vision_model_name or qwen_vl_model_name,
+                        )
+                        model_calls.append(attempt_call)
+                        if attempt_call["status"] == "failed":
+                            recovered_errors.append(
+                                {
+                                    "batch_id": file_record["batch_id"],
+                                    "file_id": file_record["file_id"],
+                                    "call_id": attempt_call["call_id"],
+                                    "error_level": "model_call",
+                                    "task_type": "visual_understanding",
+                                    "error_message": attempt_call["error_message"],
+                                }
+                            )
+                else:
+                    model_calls.append(
+                        _build_success_call(
+                            call_index=len(model_calls) + 1,
+                            file_record=file_record,
+                            task_type="visual_understanding",
+                            input_units=_vision_input_units(vision_api_usage)
+                            if vision_understanding_backend == "qwen_vl"
+                            else [{"unit_type": "frame_count", "quantity": 1}],
+                            output_units=_vision_output_units(
+                                vision_api_usage,
+                                vision_result["visual_description"],
+                            )
+                            if vision_understanding_backend == "qwen_vl"
+                            else _output_tokens(vision_result["visual_description"]),
+                            routing_rules=routing_rules,
+                            model_prices=model_prices,
+                            latency_ms=int(round((perf_counter() - vision_started_at) * 1000)),
+                            provider=vision_provider,
+                            model_name=vision_model_name,
+                            response_model_name=vision_response_model_name,
+                        )
+                    )
 
     elif media_type == "video":
-        keyframe_path = preprocessed["keyframes"][0]
-        audio_path = preprocessed["audio_path"]
+        keyframe_paths = preprocessed.get("keyframes") or []
+        keyframe_count = len(keyframe_paths)
+        audio_path = preprocessed.get("audio_path")
+        preprocessing_artifacts = preprocessed.get("preprocessing_artifacts") or {}
+        for warning in preprocessing_artifacts.get("warning_messages", []):
+            if warning not in warning_messages:
+                warning_messages.append(str(warning))
 
+        ocr_provider = "paddlepaddle" if ocr_backend == "paddleocr" else None
+        ocr_model_name = DEFAULT_PADDLEOCR_MODEL_NAME if ocr_backend == "paddleocr" else None
         if "ocr" in injected_failures:
             record_upstream_failure(
                 task_type="ocr",
                 missing_field="ocr_text",
                 quality_flag="ocr_failed",
                 warning_message="OCR 分支失败，最终分析未使用视频关键帧文字证据。",
-                input_units=[{"unit_type": "image_count", "quantity": 1}],
+                input_units=[{"unit_type": "image_count", "quantity": max(1, keyframe_count)}],
                 output_units=_output_text_chars(""),
+                provider=ocr_provider,
+                model_name=ocr_model_name,
+            )
+        elif not keyframe_paths:
+            record_upstream_failure(
+                task_type="ocr",
+                missing_field="ocr_text",
+                quality_flag="video_keyframe_missing",
+                warning_message="视频预处理未产出可用关键帧，最终分析未使用视频关键帧文字证据。",
+                input_units=[{"unit_type": "image_count", "quantity": 0}],
+                output_units=_output_text_chars(""),
+                error_message="视频预处理未产出可用关键帧。",
+                provider=ocr_provider,
+                model_name=ocr_model_name,
             )
         else:
-            ocr_result = mock_ocr_client(keyframe_path)
-            evidence.update(ocr_result)
-            evidence_used.append("ocr_text")
-            model_calls.append(
-                _build_success_call(
-                    call_index=len(model_calls) + 1,
-                    file_record=file_record,
-                    task_type="ocr",
-                    input_units=[{"unit_type": "image_count", "quantity": 1}],
-                    output_units=_output_text_chars(ocr_result["ocr_text"]),
-                    routing_rules=routing_rules,
-                    model_prices=model_prices,
-                )
-            )
+            usable_ocr_texts: list[str] = []
+            raw_ocr_texts: list[str] = []
+            low_quality_keyframes = 0
+            for keyframe_index, keyframe_path in enumerate(keyframe_paths, start=1):
+                ocr_started_at = perf_counter()
+                try:
+                    if ocr_backend == "paddleocr":
+                        ocr_result = paddleocr_client(keyframe_path)
+                    else:
+                        ocr_result = mock_ocr_client(keyframe_path)
+                except Exception as exc:
+                    failed_call = _build_failed_call(
+                        call_index=len(model_calls) + 1,
+                        file_record=file_record,
+                        task_type="ocr",
+                        input_units=[{"unit_type": "image_count", "quantity": 1}],
+                        output_units=_output_text_chars(""),
+                        routing_rules=routing_rules,
+                        model_prices=model_prices,
+                        error_message=str(exc),
+                        latency_ms=int(round((perf_counter() - ocr_started_at) * 1000)),
+                        provider=ocr_provider,
+                        model_name=ocr_model_name,
+                    )
+                    model_calls.append(failed_call)
+                    if VIDEO_OCR_KEYFRAME_FAILED_FLAG not in quality_flags:
+                        quality_flags.append(VIDEO_OCR_KEYFRAME_FAILED_FLAG)
+                    warning_messages.append(f"第 {keyframe_index} 张视频关键帧 OCR 失败，最终分析未使用该帧文字证据。")
+                    errors.append(
+                        {
+                            "batch_id": file_record["batch_id"],
+                            "file_id": file_record["file_id"],
+                            "call_id": failed_call["call_id"],
+                            "error_level": "model_call",
+                            "task_type": "ocr",
+                            "error_message": str(exc),
+                        }
+                    )
+                    continue
 
+                ocr_text = ocr_result["ocr_text"]
+                if ocr_text:
+                    frame_text = f"[关键帧 {keyframe_index}] {ocr_text}"
+                    raw_ocr_texts.append(frame_text)
+                    if ocr_backend == "paddleocr" and _is_low_quality_ocr_text(ocr_text):
+                        low_quality_keyframes += 1
+                    else:
+                        usable_ocr_texts.append(frame_text)
+                model_calls.append(
+                    _build_success_call(
+                        call_index=len(model_calls) + 1,
+                        file_record=file_record,
+                        task_type="ocr",
+                        input_units=[{"unit_type": "image_count", "quantity": 1}],
+                        output_units=_output_text_chars(ocr_text or ""),
+                        routing_rules=routing_rules,
+                        model_prices=model_prices,
+                        latency_ms=int(round((perf_counter() - ocr_started_at) * 1000)),
+                        provider=ocr_provider,
+                        model_name=ocr_model_name,
+                    )
+                )
+
+            if usable_ocr_texts:
+                evidence["ocr_text"] = "\n\n".join(usable_ocr_texts)
+                evidence_used.append("ocr_text")
+                if low_quality_keyframes:
+                    warning_messages.append("部分视频关键帧 OCR 文本疑似低质量，已从下游文本分析证据中排除。")
+            elif raw_ocr_texts:
+                evidence["ocr_text"] = "\n\n".join(raw_ocr_texts)
+                if LOW_QUALITY_OCR_FLAG not in quality_flags:
+                    quality_flags.append(LOW_QUALITY_OCR_FLAG)
+                warning_messages.append(LOW_QUALITY_OCR_WARNING)
+            elif VIDEO_OCR_KEYFRAME_FAILED_FLAG in quality_flags and "ocr_text" not in missing_evidence:
+                missing_evidence.append("ocr_text")
+
+        vision_provider = "qwen" if vision_understanding_backend == "qwen_vl" else None
+        vision_model_name = qwen_vl_model_name if vision_understanding_backend == "qwen_vl" else None
+        vision_api_usage: dict[str, int] = {}
         if "visual_understanding" in injected_failures:
             record_upstream_failure(
                 task_type="visual_understanding",
                 missing_field="visual_description",
                 quality_flag="visual_understanding_failed",
                 warning_message="视觉理解分支失败，最终分析未使用视频画面描述证据。",
-                input_units=[{"unit_type": "frame_count", "quantity": 1}],
+                input_units=_vision_input_units(vision_api_usage)
+                if vision_understanding_backend == "qwen_vl"
+                else [{"unit_type": "frame_count", "quantity": max(1, keyframe_count)}],
                 output_units=_output_tokens(""),
+                provider=vision_provider,
+                model_name=vision_model_name,
+            )
+        elif not keyframe_paths:
+            record_upstream_failure(
+                task_type="visual_understanding",
+                missing_field="visual_description",
+                quality_flag="video_keyframe_missing",
+                warning_message="视频预处理未产出可用关键帧，最终分析未使用视频画面描述证据。",
+                input_units=_vision_input_units(vision_api_usage)
+                if vision_understanding_backend == "qwen_vl"
+                else [{"unit_type": "frame_count", "quantity": 0}],
+                output_units=_vision_output_units(vision_api_usage, None)
+                if vision_understanding_backend == "qwen_vl"
+                else _output_tokens(""),
+                error_message="视频预处理未产出可用关键帧。",
+                provider=vision_provider,
+                model_name=vision_model_name,
             )
         else:
-            vision_result = mock_vision_client(keyframe_path)
-            evidence.update(vision_result)
-            evidence_used.append("visual_description")
-            model_calls.append(
-                _build_success_call(
-                    call_index=len(model_calls) + 1,
-                    file_record=file_record,
-                    task_type="visual_understanding",
-                    input_units=[{"unit_type": "frame_count", "quantity": 1}],
-                    output_units=_output_tokens(vision_result["visual_description"]),
-                    routing_rules=routing_rules,
-                    model_prices=model_prices,
-                )
-            )
+            visual_descriptions: list[str] = []
+            for keyframe_index, keyframe_path in enumerate(keyframe_paths, start=1):
+                vision_started_at = perf_counter()
+                vision_api_usage = {}
+                vision_response_model_name: str | None = None
+                vision_api_attempts: list[dict[str, Any]] = []
+                try:
+                    if vision_understanding_backend == "qwen_vl":
+                        vision_result = qwen_vl_image_understanding_client(
+                            keyframe_path,
+                            api_key=qwen_vl_api_key,
+                            model_name=qwen_vl_model_name,
+                            base_url=qwen_vl_base_url,
+                            max_retries=qwen_vl_max_retries,
+                            max_tokens=qwen_vl_max_tokens,
+                        )
+                        vision_api_usage = vision_result.pop("_api_usage", {})
+                        vision_response_model_name = vision_result.pop("_response_model_name", None)
+                        vision_api_attempts = vision_result.pop("_api_attempts", [])
+                    else:
+                        vision_result = mock_vision_client(keyframe_path)
+                except QwenVLAttemptsExhausted as exc:
+                    for attempt in exc.attempts:
+                        failed_call = _build_qwen_vl_attempt_call(
+                            attempt=attempt,
+                            call_index=len(model_calls) + 1,
+                            file_record=file_record,
+                            visual_description=None,
+                            routing_rules=routing_rules,
+                            model_prices=model_prices,
+                            provider=vision_provider or "qwen",
+                            model_name=vision_model_name or qwen_vl_model_name,
+                        )
+                        model_calls.append(failed_call)
+                        errors.append(
+                            {
+                                "batch_id": file_record["batch_id"],
+                                "file_id": file_record["file_id"],
+                                "call_id": failed_call["call_id"],
+                                "error_level": "model_call",
+                                "task_type": "visual_understanding",
+                                "error_message": failed_call["error_message"],
+                            }
+                        )
+                    if VIDEO_VISUAL_KEYFRAME_FAILED_FLAG not in quality_flags:
+                        quality_flags.append(VIDEO_VISUAL_KEYFRAME_FAILED_FLAG)
+                    warning_messages.append(f"第 {keyframe_index} 张视频关键帧 Qwen-VL 重试后仍失败，最终分析未使用该帧画面描述证据。")
+                    continue
+                except Exception as exc:
+                    failed_call = _build_failed_call(
+                        call_index=len(model_calls) + 1,
+                        file_record=file_record,
+                        task_type="visual_understanding",
+                        input_units=_vision_input_units(vision_api_usage)
+                        if vision_understanding_backend == "qwen_vl"
+                        else [{"unit_type": "frame_count", "quantity": 1}],
+                        output_units=_vision_output_units(vision_api_usage, None)
+                        if vision_understanding_backend == "qwen_vl"
+                        else _output_tokens(""),
+                        routing_rules=routing_rules,
+                        model_prices=model_prices,
+                        error_message=str(exc),
+                        latency_ms=int(round((perf_counter() - vision_started_at) * 1000)),
+                        provider=vision_provider,
+                        model_name=vision_model_name,
+                    )
+                    model_calls.append(failed_call)
+                    if VIDEO_VISUAL_KEYFRAME_FAILED_FLAG not in quality_flags:
+                        quality_flags.append(VIDEO_VISUAL_KEYFRAME_FAILED_FLAG)
+                    warning_messages.append(f"第 {keyframe_index} 张视频关键帧视觉理解失败，最终分析未使用该帧画面描述证据。")
+                    errors.append(
+                        {
+                            "batch_id": file_record["batch_id"],
+                            "file_id": file_record["file_id"],
+                            "call_id": failed_call["call_id"],
+                            "error_level": "model_call",
+                            "task_type": "visual_understanding",
+                            "error_message": str(exc),
+                        }
+                    )
+                    continue
+
+                visual_description = vision_result["visual_description"]
+                visual_descriptions.append(f"[关键帧 {keyframe_index}] {visual_description}")
+                if vision_understanding_backend == "qwen_vl" and vision_api_attempts:
+                    for attempt in vision_api_attempts:
+                        attempt_call = _build_qwen_vl_attempt_call(
+                            attempt=attempt,
+                            call_index=len(model_calls) + 1,
+                            file_record=file_record,
+                            visual_description=visual_description,
+                            routing_rules=routing_rules,
+                            model_prices=model_prices,
+                            provider=vision_provider or "qwen",
+                            model_name=vision_model_name or qwen_vl_model_name,
+                        )
+                        model_calls.append(attempt_call)
+                        if attempt_call["status"] == "failed":
+                            recovered_errors.append(
+                                {
+                                    "batch_id": file_record["batch_id"],
+                                    "file_id": file_record["file_id"],
+                                    "call_id": attempt_call["call_id"],
+                                    "error_level": "model_call",
+                                    "task_type": "visual_understanding",
+                                    "error_message": attempt_call["error_message"],
+                                }
+                            )
+                else:
+                    model_calls.append(
+                        _build_success_call(
+                            call_index=len(model_calls) + 1,
+                            file_record=file_record,
+                            task_type="visual_understanding",
+                            input_units=_vision_input_units(vision_api_usage)
+                            if vision_understanding_backend == "qwen_vl"
+                            else [{"unit_type": "frame_count", "quantity": 1}],
+                            output_units=_vision_output_units(
+                                vision_api_usage,
+                                visual_description,
+                            )
+                            if vision_understanding_backend == "qwen_vl"
+                            else _output_tokens(visual_description),
+                            routing_rules=routing_rules,
+                            model_prices=model_prices,
+                            latency_ms=int(round((perf_counter() - vision_started_at) * 1000)),
+                            provider=vision_provider,
+                            model_name=vision_model_name,
+                            response_model_name=vision_response_model_name,
+                        )
+                    )
+
+            if visual_descriptions:
+                evidence["visual_description"] = "\n\n".join(visual_descriptions)
+                evidence_used.append("visual_description")
+            elif VIDEO_VISUAL_KEYFRAME_FAILED_FLAG in quality_flags and "visual_description" not in missing_evidence:
+                missing_evidence.append("visual_description")
 
         if "speech_to_text" in injected_failures:
             record_upstream_failure(
@@ -457,24 +957,86 @@ def run_file_pipeline(
                 missing_field="audio_transcript",
                 quality_flag="speech_to_text_failed",
                 warning_message="语音识别分支失败，最终分析未使用音频转写证据。",
-                input_units=[{"unit_type": "audio_seconds", "quantity": preprocessed["duration_ms"] / 1000}],
+                input_units=[{"unit_type": "audio_seconds", "quantity": _video_audio_seconds(preprocessed)}],
                 output_units=_output_text_chars(""),
             )
-        else:
-            asr_result = mock_asr_client(audio_path)
-            evidence.update(asr_result)
-            evidence_used.append("audio_transcript")
-            model_calls.append(
-                _build_success_call(
-                    call_index=len(model_calls) + 1,
-                    file_record=file_record,
-                    task_type="speech_to_text",
-                    input_units=[{"unit_type": "audio_seconds", "quantity": preprocessed["duration_ms"] / 1000}],
-                    output_units=_output_text_chars(asr_result["audio_transcript"]),
-                    routing_rules=routing_rules,
-                    model_prices=model_prices,
-                )
+        elif audio_path is None:
+            audio_error_message = _audio_missing_message(preprocessed)
+            record_upstream_failure(
+                task_type="speech_to_text",
+                missing_field="audio_transcript",
+                quality_flag="video_audio_not_extracted",
+                warning_message="视频音频未成功提取，最终分析未使用音频转写证据。",
+                input_units=[{"unit_type": "audio_seconds", "quantity": 0}],
+                output_units=_output_text_chars(""),
+                error_message=audio_error_message,
             )
+        else:
+            asr_started_at = perf_counter()
+            asr_provider = "dashscope" if speech_to_text_backend == "dashscope_asr" else None
+            asr_model_name = dashscope_asr_model_name if speech_to_text_backend == "dashscope_asr" else None
+            asr_request_started = speech_to_text_backend != "dashscope_asr"
+            try:
+                if speech_to_text_backend == "dashscope_asr":
+                    audio_url = _audio_url_for_record(
+                        file_record=file_record,
+                        audio_path=audio_path,
+                        audio_url_map=asr_audio_url_map,
+                    )
+                    if not audio_url:
+                        audio_url = dashscope_upload_local_file(
+                            audio_path,
+                            api_key=dashscope_asr_api_key,
+                            model_name=dashscope_asr_model_name,
+                        )
+                    asr_request_started = True
+                    asr_result = dashscope_asr_client(
+                        audio_url,
+                        api_key=dashscope_asr_api_key,
+                        model_name=dashscope_asr_model_name,
+                        submit_url=dashscope_asr_submit_url,
+                    )
+                    response_model_name = asr_result.pop("_response_model_name", dashscope_asr_model_name)
+                    asr_result.pop("_api_usage", {})
+                    asr_result.pop("_response_diagnostics", {})
+                else:
+                    asr_result = mock_asr_client(audio_path)
+                    response_model_name = None
+                evidence.update(asr_result)
+                evidence_used.append("audio_transcript")
+                model_calls.append(
+                    _build_success_call(
+                        call_index=len(model_calls) + 1,
+                        file_record=file_record,
+                        task_type="speech_to_text",
+                        input_units=[{"unit_type": "audio_seconds", "quantity": _video_audio_seconds(preprocessed)}],
+                        output_units=_output_text_chars(asr_result["audio_transcript"]),
+                        routing_rules=routing_rules,
+                        model_prices=model_prices,
+                        latency_ms=int(round((perf_counter() - asr_started_at) * 1000)),
+                        provider=asr_provider,
+                        model_name=asr_model_name,
+                        response_model_name=response_model_name,
+                    )
+                )
+            except Exception as exc:
+                record_upstream_failure(
+                    task_type="speech_to_text",
+                    missing_field="audio_transcript",
+                    quality_flag="speech_to_text_failed",
+                    warning_message="语音识别分支失败，最终分析未使用音频转写证据。",
+                    input_units=[
+                        {
+                            "unit_type": "audio_seconds",
+                            "quantity": _video_audio_seconds(preprocessed) if asr_request_started else 0,
+                        }
+                    ],
+                    output_units=_output_text_chars(""),
+                    error_message=str(exc),
+                    latency_ms=int(round((perf_counter() - asr_started_at) * 1000)),
+                    provider=asr_provider,
+                    model_name=asr_model_name,
+                )
 
     else:
         raise ValueError(f"不支持的文件类型: {media_type}")
@@ -501,6 +1063,7 @@ def run_file_pipeline(
                 model_name=deepseek_model_name,
                 base_url=deepseek_base_url,
                 max_retries=deepseek_max_retries,
+                max_tokens=deepseek_max_tokens,
             )
             api_usage = analysis_result.pop("_api_usage", {})
             api_attempts = analysis_result.pop("_api_attempts", [])
@@ -536,6 +1099,7 @@ def run_file_pipeline(
                 model_prices=model_prices,
                 provider=analysis_provider or fallback_model["provider"],
                 model_name=analysis_model_name or fallback_model["model_name"],
+                response_diagnostics=attempt.get("response_diagnostics"),
             )
             model_calls.append(failed_call)
             errors.append(
@@ -557,6 +1121,7 @@ def run_file_pipeline(
             "source_path": file_record["source_path"],
             "file_size_bytes": file_record["file_size_bytes"],
             "duration_ms": preprocessed.get("duration_ms"),
+            "preprocessing_artifacts": preprocessed.get("preprocessing_artifacts"),
             "language": "unknown",
             "created_at": file_record["created_at"],
             "processed_at": _now_iso(),
@@ -618,6 +1183,7 @@ def run_file_pipeline(
                 model_prices=model_prices,
                 provider=analysis_provider or "deepseek",
                 model_name=analysis_model_name or deepseek_model_name,
+                response_diagnostics=attempt.get("response_diagnostics"),
             )
             model_calls.append(failed_call)
             recovered_errors.append(
@@ -658,6 +1224,7 @@ def run_file_pipeline(
         "source_path": file_record["source_path"],
         "file_size_bytes": file_record["file_size_bytes"],
         "duration_ms": preprocessed.get("duration_ms"),
+        "preprocessing_artifacts": preprocessed.get("preprocessing_artifacts"),
         "language": "unknown",
         "created_at": file_record["created_at"],
         "processed_at": _now_iso(),

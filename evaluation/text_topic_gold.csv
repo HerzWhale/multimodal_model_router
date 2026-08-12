@@ -17,3 +17,5 @@
 16_entertainment_long_variety_production.txt,entertainment,核心是综艺剪辑 嘉宾互动 节目效果和观众讨论 属于娱乐休闲
 17_other_long_campus_lost_found.txt,other,核心是校内失物认领事务和操作流程 不符合其余八类业务主题
 18_other_long_community_coordination.txt,other,核心是社区共享工具借用与安全登记流程 不符合其余八类业务主题
+19_gaming_mobile_strategy.txt,gaming,核心是游戏阵容 地图资源 开团时机和对战策略 不是手机性能测试
+20_humor_restaurant_animals.txt,humor,核心是餐厅动物突发事件造成的搞笑反转 不是娱乐圈内容也不是餐厅测评

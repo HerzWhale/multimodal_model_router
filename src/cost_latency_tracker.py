@@ -12,6 +12,9 @@ import yaml
 
 
 VALID_STATUSES = {"success", "failed", "skipped"}
+DEFAULT_PRICE_SOURCE = "unspecified"
+DEFAULT_PRICE_UPDATED_AT = None
+DEFAULT_PRICE_CONFIDENCE = "unknown"
 
 
 def load_model_prices(config_path: str | Path) -> dict[str, dict[str, Any]]:
@@ -53,6 +56,18 @@ def calculate_cost_cny(
     return round(quantity * float(price_rule["price_cny_per_unit"]), 6)
 
 
+def build_price_metadata(model_name: str, model_prices: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """生成价格目录元数据，说明本次成本估算依据是否可靠。"""
+
+    price_rule = model_prices[model_name]
+    return {
+        "cost_estimation_method": "price_catalog",
+        "price_source": price_rule.get("price_source", DEFAULT_PRICE_SOURCE),
+        "price_updated_at": price_rule.get("price_updated_at", DEFAULT_PRICE_UPDATED_AT),
+        "price_confidence": price_rule.get("price_confidence", DEFAULT_PRICE_CONFIDENCE),
+    }
+
+
 def build_model_call_record(
     *,
     call_id: str,
@@ -68,24 +83,31 @@ def build_model_call_record(
     status: str,
     error_message: str | None,
     model_prices: dict[str, dict[str, Any]],
+    response_model_name: str | None = None,
+    response_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """生成一条模型调用记录。"""
 
     if status not in VALID_STATUSES:
         raise ValueError(f"不支持的调用状态: {status}")
 
-    return {
+    record = {
         "call_id": call_id,
         "batch_id": batch_id,
         "file_id": file_id,
         "task_type": task_type,
         "provider": provider,
         "model_name": model_name,
+        "response_model_name": response_model_name,
         "input_units": input_units,
         "output_units": output_units,
         "cost_cny": calculate_cost_cny(model_name, input_units, model_prices, output_units),
+        **build_price_metadata(model_name, model_prices),
         "latency_ms": latency_ms,
         "started_at": started_at,
         "status": status,
         "error_message": error_message,
     }
+    if response_diagnostics:
+        record["response_diagnostics"] = response_diagnostics
+    return record

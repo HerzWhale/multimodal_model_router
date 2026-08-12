@@ -9,10 +9,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from runtime_config import runtime_policy_section
 
-TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json"}
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+def _configured_extensions(media_type: str) -> set[str]:
+    """读取指定媒体类型的扩展名白名单。"""
+
+    values = runtime_policy_section("file_extensions").get(media_type, [])
+    if not isinstance(values, list):
+        raise ValueError(f"file_extensions.{media_type} 必须是数组。")
+    return {str(value).lower() for value in values}
+
+
+TEXT_EXTENSIONS = _configured_extensions("text")
+IMAGE_EXTENSIONS = _configured_extensions("image")
+VIDEO_EXTENSIONS = _configured_extensions("video")
 
 
 def detect_media_type(file_path: str | Path) -> str | None:

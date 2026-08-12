@@ -20,6 +20,8 @@ VALID_TOPIC_VALUES = {
     "finance_business",
     "ads_marketing",
     "technology",
+    "gaming",
+    "humor",
     "sports_health",
     "entertainment",
     "lifestyle",
@@ -44,6 +46,8 @@ GOLD_FIELDS = [
     "gold_topic",
     "reviewer_note",
 ]
+
+VIDEO_TEMPLATE_FIELDS = TEMPLATE_FIELDS[:-1] + ["gold_secondary_topics", "reviewer_note"]
 
 
 def read_json_objects(file_path: str | Path) -> list[dict[str, Any]]:
@@ -71,25 +75,37 @@ def read_json_objects(file_path: str | Path) -> list[dict[str, Any]]:
 def extract_text_topic_rows(records: list[dict[str, Any]], *, preview_chars: int = 160) -> list[dict[str, str]]:
     """从文件级结果中提取文本主分类人工标注行。"""
 
+    return extract_topic_rows(records, media_type="text", preview_chars=preview_chars)
+
+
+def extract_topic_rows(
+    records: list[dict[str, Any]],
+    *,
+    media_type: str,
+    preview_chars: int = 160,
+) -> list[dict[str, str]]:
+    """从文件级结果中提取指定媒体类型的主分类人工标注行。"""
+
     rows: list[dict[str, str]] = []
     for record in records:
-        if record.get("media_type") != "text":
+        if record.get("media_type") != media_type:
             continue
 
-        raw_text = str(record.get("raw_text") or "")
-        rows.append(
-            {
-                "batch_id": _as_text(record.get("batch_id")),
-                "file_id": _as_text(record.get("file_id")),
-                "file_name": _as_text(record.get("file_name")),
-                "predicted_topic": _optional_text(record.get("topic")),
-                "predicted_secondary_topics": _format_list(record.get("secondary_topics")),
-                "summary": _as_text(record.get("summary")),
-                "raw_text_preview": _clean_preview(raw_text, preview_chars),
-                "gold_topic": "",
-                "reviewer_note": "",
-            }
-        )
+        evidence_text = _evidence_preview_text(record)
+        row = {
+            "batch_id": _as_text(record.get("batch_id")),
+            "file_id": _as_text(record.get("file_id")),
+            "file_name": _as_text(record.get("file_name")),
+            "predicted_topic": _optional_text(record.get("topic")),
+            "predicted_secondary_topics": _format_list(record.get("secondary_topics")),
+            "summary": _as_text(record.get("summary")),
+            "raw_text_preview": _clean_preview(evidence_text, preview_chars),
+            "gold_topic": "",
+            "reviewer_note": "",
+        }
+        if media_type == "video":
+            row["gold_secondary_topics"] = ""
+        rows.append(row)
     return rows
 
 
@@ -121,6 +137,8 @@ def apply_gold_topics(
         gold_row = gold_by_key.get(str(row.get(match_key) or ""))
         if gold_row:
             merged_row["gold_topic"] = str(gold_row.get("gold_topic") or "")
+            if "gold_secondary_topics" in gold_row or "gold_secondary_topics" in merged_row:
+                merged_row["gold_secondary_topics"] = str(gold_row.get("gold_secondary_topics") or "")
             merged_row["reviewer_note"] = str(gold_row.get("reviewer_note") or "")
         merged_rows.append(merged_row)
     return merged_rows
@@ -130,17 +148,19 @@ def write_annotation_template(
     results_path: str | Path,
     output_path: str | Path,
     gold_path: str | Path | None = None,
+    *,
+    media_type: str = "text",
 ) -> Path:
     """从 results.jsonl 生成文本主分类人工标注模板。"""
 
-    rows = extract_text_topic_rows(read_json_objects(results_path))
+    rows = extract_topic_rows(read_json_objects(results_path), media_type=media_type)
     if gold_path is not None:
         rows = apply_gold_topics(rows, read_gold_topic_rows(gold_path))
 
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=TEMPLATE_FIELDS)
+        writer = csv.DictWriter(file, fieldnames=VIDEO_TEMPLATE_FIELDS if media_type == "video" else TEMPLATE_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
     return path
@@ -162,6 +182,9 @@ def evaluate_topic_metrics(annotation_rows: list[dict[str, str]]) -> dict[str, A
     missing_prediction_file_ids: list[str] = []
     invalid_prediction_file_ids: list[str] = []
     valid_prediction_count = 0
+    has_secondary_gold = any("gold_secondary_topics" in row for row in annotation_rows)
+    secondary_evaluated_count = 0
+    secondary_correct_count = 0
 
     for row in annotation_rows:
         file_id = str(row.get("file_id") or "")
@@ -182,6 +205,14 @@ def evaluate_topic_metrics(annotation_rows: list[dict[str, str]]) -> dict[str, A
             valid_prediction_count += 1
 
         is_correct = predicted_topic == gold_topic
+        secondary_correct: bool | str = MISSING_VALUE_TEXT
+        if has_secondary_gold:
+            secondary_evaluated_count += 1
+            predicted_secondary_topics = _parse_topic_list(row.get("predicted_secondary_topics") or "")
+            gold_secondary_topics = _parse_topic_list(row.get("gold_secondary_topics") or "")
+            secondary_correct = predicted_secondary_topics == gold_secondary_topics
+            if secondary_correct:
+                secondary_correct_count += 1
         evaluated_details.append(
             {
                 "file_id": file_id,
@@ -189,6 +220,9 @@ def evaluate_topic_metrics(annotation_rows: list[dict[str, str]]) -> dict[str, A
                 "predicted_topic": predicted_topic,
                 "gold_topic": gold_topic,
                 "is_correct": is_correct,
+                "predicted_secondary_topics": row.get("predicted_secondary_topics", ""),
+                "gold_secondary_topics": row.get("gold_secondary_topics", ""),
+                "secondary_topics_correct": secondary_correct,
                 "reviewer_note": row.get("reviewer_note") or "",
             }
         )
@@ -240,6 +274,13 @@ def evaluate_topic_metrics(annotation_rows: list[dict[str, str]]) -> dict[str, A
             if evaluated_count
             else MISSING_VALUE_TEXT
         ),
+        "secondary_topics_evaluated_count": secondary_evaluated_count,
+        "secondary_topics_correct_count": secondary_correct_count if has_secondary_gold else MISSING_VALUE_TEXT,
+        "secondary_topics_accuracy": (
+            round(secondary_correct_count / secondary_evaluated_count, 6)
+            if secondary_evaluated_count
+            else MISSING_VALUE_TEXT
+        ),
         "macro_f1": macro_f1,
         "evaluated_labels": evaluated_labels,
         "per_class_metrics": per_class_metrics,
@@ -250,11 +291,14 @@ def evaluate_topic_metrics(annotation_rows: list[dict[str, str]]) -> dict[str, A
         "field_notes": {
             "gold_topic": "人工标注的正确主分类，用于和模型预测的 predicted_topic 对比。",
             "predicted_topic": "模型输出的主分类，用于衡量文本分类结果是否命中人工标签。",
+            "gold_secondary_topics": "人工标注的正确副分类列表，用于检查模型是否错误添加或漏掉交叉领域。",
+            "predicted_secondary_topics": "模型输出的副分类列表，用于和 gold_secondary_topics 对比。",
+            "secondary_topics_accuracy": "副分类完全匹配率，要求预测副分类集合与人工副分类集合一致。",
             "reviewer_note": "人工评审备注，用于记录分类正确或错误的判断依据。",
             "accuracy": "端到端文本主分类准确率，计算方式为 correct_count / evaluated_count；调用失败或无有效预测按未命中计算。",
-            "valid_prediction_accuracy": "仅在有效九分类预测中的准确率，用于把分类判断能力与调用可用性分开观察。",
-            "prediction_coverage": "有效九分类预测数占已标注样本数的比例，用于衡量模型调用和结构解析是否稳定。",
-            "macro_f1": "九类业务标签中本批次实际出现分类的 F1 简单平均；无结果和非法预测会造成对应真实分类漏报，但不会被当作新分类。",
+            "valid_prediction_accuracy": "仅在有效业务分类预测中的准确率，用于把分类判断能力与调用可用性分开观察。",
+            "prediction_coverage": "有效业务分类预测数占已标注样本数的比例，用于衡量模型调用和结构解析是否稳定。",
+            "macro_f1": "业务标签中本批次实际出现分类的 F1 简单平均；无结果和非法预测会造成对应真实分类漏报，但不会被当作新分类。",
             "precision": "预测为某分类的样本中，真正属于该分类的比例。",
             "recall": "人工标注为某分类的样本中，被模型正确识别的比例。",
             "f1": "单个分类 Precision 与 Recall 的调和平均，用于综合衡量误报和漏报。",
@@ -345,14 +389,15 @@ def render_evaluation_markdown(report: dict[str, Any]) -> str:
         f"| 模板行数 | {report['total_template_rows']} | 需要人工判断的文本样本数 |",
         f"| 已评估样本数 | {report['evaluated_count']} | 已填写 gold_topic 的样本数 |",
         f"| 缺少标签样本数 | {report['missing_label_count']} | 尚未填写 gold_topic 的样本数 |",
-        f"| 有效预测数 | {report['valid_prediction_count']} | 成功产出九类范围内 predicted_topic 的样本数 |",
+        f"| 有效预测数 | {report['valid_prediction_count']} | 成功产出允许分类范围内 predicted_topic 的样本数 |",
         f"| 缺少预测数 | {report['missing_prediction_count']} | 调用或解析失败导致没有 predicted_topic 的样本数 |",
         f"| 非法预测数 | {report['invalid_prediction_count']} | predicted_topic 不属于九类允许值的样本数 |",
         f"| 预测正确数 | {report['correct_count']} | predicted_topic 与 gold_topic 相同的样本数 |",
         f"| 端到端 Accuracy | {_format_metric(report['accuracy'])} | 以全部已标注样本为分母，无有效预测按未命中计算 |",
         f"| 有效预测 Accuracy | {_format_metric(report['valid_prediction_accuracy'])} | 仅衡量成功产出九类预测的样本 |",
         f"| 预测覆盖率 | {_format_metric(report['prediction_coverage'])} | 有效预测数占已标注样本数的比例 |",
-        f"| Macro-F1 | {_format_metric(report['macro_f1'])} | 九类业务标签中本批次实际出现分类 F1 的简单平均 |",
+        f"| 副分类 Accuracy | {_format_metric(report['secondary_topics_accuracy'])} | predicted_secondary_topics 与 gold_secondary_topics 完全一致的比例 |",
+        f"| Macro-F1 | {_format_metric(report['macro_f1'])} | 业务标签中本批次实际出现分类 F1 的简单平均 |",
         "",
         "## 分类级指标",
         "",
@@ -397,7 +442,7 @@ def render_evaluation_markdown(report: dict[str, Any]) -> str:
         lines.extend(f"- {file_id}" for file_id in report["missing_prediction_file_ids"])
 
     if report["invalid_prediction_file_ids"]:
-        lines.extend(["", "## 预测值不符合九类约束的文件", ""])
+        lines.extend(["", "## 预测值不符合分类约束的文件", ""])
         lines.extend(f"- {file_id}" for file_id in report["invalid_prediction_file_ids"])
 
     lines.extend(["", "## 字段说明", "", "| 字段 | 含义与作用 |", "|---|---|"])
@@ -435,6 +480,25 @@ def _format_list(value: Any) -> str:
     return str(value)
 
 
+def _parse_topic_list(value: str) -> list[str]:
+    """把 CSV 中的副分类文本转成去重后的有序列表。"""
+
+    if not value:
+        return []
+    parts = str(value).replace("，", "、").replace(",", "、").split("、")
+    return sorted({part.strip() for part in parts if part.strip()})
+
+
+def _evidence_preview_text(record: dict[str, Any]) -> str:
+    """取一个短证据预览，避免视频评估表为空。"""
+
+    for key in ("raw_text", "ocr_text", "audio_transcript", "visual_description", "summary"):
+        value = record.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
 def _clean_preview(raw_text: str, preview_chars: int) -> str:
     """生成单行文本预览。"""
 
@@ -465,6 +529,11 @@ def main(argv: list[str] | None = None) -> int:
     if command == "template" and len(args) in {3, 4}:
         gold_path = args[3] if len(args) == 4 else None
         output_path = write_annotation_template(args[1], args[2], gold_path)
+        print(json.dumps({"template": str(output_path)}, ensure_ascii=False, indent=2))
+        return 0
+
+    if command == "template" and len(args) == 5:
+        output_path = write_annotation_template(args[1], args[2], args[3], media_type=args[4])
         print(json.dumps({"template": str(output_path)}, ensure_ascii=False, indent=2))
         return 0
 

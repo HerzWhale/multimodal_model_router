@@ -76,6 +76,36 @@ def _sum_by(records: list[dict[str, Any]], group_key: str, value_key: str) -> di
     return {key: round(value, 6) for key, value in sorted(totals.items())}
 
 
+def _runtime_type_for_call(model_call: dict[str, Any]) -> str:
+    """判断模型调用是真实 API、本地模型、mock 还是未知来源。"""
+
+    explicit_runtime_type = str(model_call.get("runtime_type") or "")
+    if explicit_runtime_type in {"live_api", "local_model", "mock", "unknown"}:
+        return explicit_runtime_type
+
+    provider = str(model_call.get("provider") or "")
+    model_name = str(model_call.get("model_name") or "")
+    price_source = str(model_call.get("price_source") or "")
+    price_confidence = str(model_call.get("price_confidence") or "")
+
+    if model_name.startswith("mock-") or price_source == "local_mock_assumption" or price_confidence == "mock_only":
+        return "mock"
+    if provider == "paddlepaddle" or price_source == "local_runtime_assumption":
+        return "local_model"
+    if provider in {"deepseek", "qwen", "dashscope", "doubao", "tongyi"}:
+        return "live_api"
+    return "unknown"
+
+
+def _cost_by_runtime_type(model_calls: list[dict[str, Any]]) -> dict[str, float]:
+    """按运行类型汇总成本，用于把真实 API、本地模型和 mock 占位拆开。"""
+
+    totals: dict[str, float] = defaultdict(float)
+    for model_call in model_calls:
+        totals[_runtime_type_for_call(model_call)] += float(model_call.get("cost_cny", 0))
+    return {key: round(value, 6) for key, value in sorted(totals.items())}
+
+
 def _latency_by(records: list[dict[str, Any]], group_key: str) -> dict[str, dict[str, float]]:
     """按指定字段分组统计平均延迟和 95 分位延迟。"""
 
@@ -141,7 +171,11 @@ def generate_batch_report(
     failed_files = sum(1 for result in results if result.get("processing_status") == "failed")
     skipped_files = sum(1 for result in results if result.get("processing_status") == "skipped")
 
-    total_cost_cny = round(sum(float(call.get("cost_cny", 0)) for call in model_calls), 6)
+    runtime_costs = _cost_by_runtime_type(model_calls)
+    billable_model_calls = [call for call in model_calls if _runtime_type_for_call(call) == "live_api"]
+    recorded_total_cost_cny = round(sum(float(call.get("cost_cny", 0)) for call in model_calls), 6)
+    total_cost_cny = round(runtime_costs.get("live_api", 0.0), 6)
+    cost_confidence = "estimated_unreconciled" if total_cost_cny > 0 else "not_applicable_no_live_api_cost"
     avg_cost_per_success_file_cny = round(total_cost_cny / success_files, 6) if success_files else 0.0
     model_latencies = [float(call.get("latency_ms", 0)) for call in model_calls]
     processing_times = [float(result.get("processing_time_ms", 0)) for result in results]
@@ -164,11 +198,23 @@ def generate_batch_report(
         "cost_stats": {
             "budget_limit_cny": budget_limit_cny,
             "total_cost_cny": total_cost_cny,
+            "recorded_total_cost_cny": recorded_total_cost_cny,
+            "live_api_cost_cny": runtime_costs.get("live_api", 0.0),
+            "local_model_cost_cny": runtime_costs.get("local_model", 0.0),
+            "mock_cost_cny": runtime_costs.get("mock", 0.0),
+            "unknown_runtime_cost_cny": runtime_costs.get("unknown", 0.0),
             "avg_cost_per_file_cny": _rate(total_cost_cny, total_files),
             "avg_cost_per_success_file_cny": avg_cost_per_success_file_cny,
-            "cost_by_task_type": _sum_by(model_calls, "task_type", "cost_cny"),
-            "cost_by_provider": _sum_by(model_calls, "provider", "cost_cny"),
+            "cost_by_runtime_type": runtime_costs,
+            "cost_by_task_type": _sum_by(billable_model_calls, "task_type", "cost_cny"),
+            "cost_by_provider": _sum_by(billable_model_calls, "provider", "cost_cny"),
+            "recorded_cost_by_task_type": _sum_by(model_calls, "task_type", "cost_cny"),
+            "recorded_cost_by_provider": _sum_by(model_calls, "provider", "cost_cny"),
             "budget_used_rate": round(total_cost_cny / budget_limit_cny, 6) if budget_limit_cny else 0.0,
+            "cost_confidence": cost_confidence,
+            "billing_reconciled": False,
+            "cost_scope_note": "total_cost_cny 是按本地价格表计算的真实 API 估算成本，不等同供应商后台真实扣费；recorded_total_cost_cny 包含 mock 占位成本。",
+            "cost_estimation_note": "未运行成本对账前，不能用 batch_report.json 证明估算误差；如供应商免费额度抵扣，后台真实扣费可能为 0。",
         },
         "latency_stats": {
             "total_processing_time_ms": round(sum(processing_times), 6),

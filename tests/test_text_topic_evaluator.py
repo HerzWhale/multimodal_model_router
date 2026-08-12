@@ -17,11 +17,14 @@ sys.path.insert(0, str(SRC_DIR))
 EVALUATION_DIR = PROJECT_ROOT / "evaluation"
 TEXT_TOPIC_SAMPLE_DIR = EVALUATION_DIR / "text_topic_small_set"
 TEXT_TOPIC_GOLD_PATH = EVALUATION_DIR / "text_topic_gold.csv"
+VIDEO_TOPIC_GOLD_PATH = EVALUATION_DIR / "video_topic_gold.csv"
 EXPECTED_TOPIC_SET = {
     "news",
     "finance_business",
     "ads_marketing",
     "technology",
+    "gaming",
+    "humor",
     "sports_health",
     "entertainment",
     "lifestyle",
@@ -33,6 +36,7 @@ from text_topic_evaluator import (  # noqa: E402
     apply_gold_topics,
     evaluate_topic_metrics,
     extract_text_topic_rows,
+    extract_topic_rows,
     read_gold_topic_rows,
     read_annotation_rows,
     render_evaluation_markdown,
@@ -66,6 +70,22 @@ def _records() -> list[dict]:
 
 
 class TextTopicEvaluatorTest(unittest.TestCase):
+    def test_video_topic_gold_contains_reviewed_boundary_cases(self) -> None:
+        with VIDEO_TOPIC_GOLD_PATH.open(encoding="utf-8-sig", newline="") as file:
+            rows = list(csv.DictReader(file))
+
+        by_file_name = {row["file_name"]: row for row in rows}
+
+        self.assertEqual(by_file_name["例子.mp4"]["gold_topic"], "other")
+        self.assertEqual(by_file_name["例子1.mp4"]["gold_topic"], "humor")
+        self.assertEqual(by_file_name["例子1.mp4"]["gold_secondary_topics"], "lifestyle")
+        self.assertEqual(by_file_name["例子2.mp4"]["gold_topic"], "technology")
+        self.assertEqual(by_file_name["例子2.mp4"]["gold_secondary_topics"], "")
+        self.assertEqual(by_file_name["例子3.mp4"]["gold_topic"], "finance_business")
+        self.assertEqual(by_file_name["例子3.mp4"]["gold_secondary_topics"], "")
+        for row in rows:
+            self.assertIn(row["gold_topic"], EXPECTED_TOPIC_SET)
+
     def test_extract_only_text_topic_rows(self) -> None:
         rows = extract_text_topic_rows(_records())
 
@@ -74,6 +94,38 @@ class TextTopicEvaluatorTest(unittest.TestCase):
         self.assertEqual(rows[0]["predicted_topic"], "technology")
         self.assertEqual(rows[0]["predicted_secondary_topics"], "knowledge")
         self.assertEqual(rows[0]["gold_topic"], "")
+
+    def test_extract_video_topic_rows_and_apply_secondary_gold(self) -> None:
+        rows = extract_topic_rows(
+            [
+                {
+                    "batch_id": "batch_video",
+                    "file_id": "file_001",
+                    "file_name": "例子1.mp4",
+                    "media_type": "video",
+                    "topic": "humor",
+                    "secondary_topics": ["lifestyle"],
+                    "summary": "动物餐厅相关搞笑视频。",
+                }
+            ],
+            media_type="video",
+        )
+        merged_rows = apply_gold_topics(
+            rows,
+            [
+                {
+                    "file_name": "例子1.mp4",
+                    "gold_topic": "humor",
+                    "gold_secondary_topics": "lifestyle",
+                    "reviewer_note": "用户确认的边界样本",
+                }
+            ],
+        )
+
+        self.assertEqual(merged_rows[0]["predicted_topic"], "humor")
+        self.assertEqual(merged_rows[0]["predicted_secondary_topics"], "lifestyle")
+        self.assertEqual(merged_rows[0]["gold_topic"], "humor")
+        self.assertEqual(merged_rows[0]["gold_secondary_topics"], "lifestyle")
 
     def test_extract_keeps_missing_prediction_empty(self) -> None:
         records = _records()
@@ -228,6 +280,33 @@ class TextTopicEvaluatorTest(unittest.TestCase):
         self.assertNotIn("unknown_topic", metrics_by_topic)
         self.assertEqual(metrics_by_topic["news"]["false_negative"], 1)
 
+    def test_video_secondary_topics_accuracy_requires_exact_set_match(self) -> None:
+        report = evaluate_topic_metrics(
+            [
+                {
+                    "file_id": "file_001",
+                    "file_name": "例子1.mp4",
+                    "predicted_topic": "humor",
+                    "predicted_secondary_topics": "lifestyle",
+                    "gold_topic": "humor",
+                    "gold_secondary_topics": "lifestyle",
+                },
+                {
+                    "file_id": "file_002",
+                    "file_name": "例子2.mp4",
+                    "predicted_topic": "technology",
+                    "predicted_secondary_topics": "entertainment",
+                    "gold_topic": "technology",
+                    "gold_secondary_topics": "",
+                },
+            ]
+        )
+
+        self.assertEqual(report["accuracy"], 1.0)
+        self.assertEqual(report["secondary_topics_evaluated_count"], 2)
+        self.assertEqual(report["secondary_topics_correct_count"], 1)
+        self.assertEqual(report["secondary_topics_accuracy"], 0.5)
+
     def test_missing_prediction_is_separated_from_classification_quality(self) -> None:
         report = evaluate_topic_metrics(
             [
@@ -302,7 +381,7 @@ class TextTopicEvaluatorTest(unittest.TestCase):
         gold_file_names = sorted(row["file_name"] for row in gold_rows)
         gold_topics = {row["gold_topic"] for row in gold_rows}
 
-        self.assertEqual(len(sample_files), 18)
+        self.assertEqual(len(sample_files), 20)
         self.assertEqual(sample_files, gold_file_names)
         self.assertEqual(gold_topics, EXPECTED_TOPIC_SET)
 
@@ -313,7 +392,7 @@ class TextTopicEvaluatorTest(unittest.TestCase):
         gold_rows = read_gold_topic_rows(TEXT_TOPIC_GOLD_PATH)
 
         self.assertTrue(raw_bytes.startswith(b"\xef\xbb\xbf"))
-        self.assertEqual(len(gold_rows), 18)
+        self.assertEqual(len(gold_rows), 20)
         self.assertEqual(
             set(gold_rows[0]),
             {"file_name", "gold_topic", "reviewer_note"},

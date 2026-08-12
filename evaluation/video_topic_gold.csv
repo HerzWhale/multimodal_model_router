@@ -1,0 +1,6 @@
+﻿source_batch_id,file_name,gold_topic,gold_secondary_topics,reviewer_note
+batch_video_qwen_vl_4videos_review,例子.mp4,other,,普通合唱音乐视频；没有明星、综艺、影视、新闻、广告或商业分析等更强领域归属；不能因抖音搜索页或手机界面误判为 technology。
+batch_video_full_real_3videos_eval,例子1.mp4,humor,lifestyle,核心是澳洲餐厅里猫、袋鼠和老鼠造成的突发趣事与搞笑反转；不是娱乐圈、综艺、影视或明星内容；餐厅用餐场景可作为 lifestyle 副分类。
+batch_video_qwen_vl_4videos_review,例子2.mp4,technology,,游戏只是手机性能测试负载；内容核心是手机性能、帧率、功耗和测试条件；不应加入 entertainment 副分类。
+batch_video_qwen_vl_4videos_review,例子3.mp4,finance_business,,内容核心是亚洲金融危机、日本银行和财经解释；点赞评论数、播放界面或平台数据不构成 technology 副分类。
+batch_video_all_v1_failed_text_retry,抖音2026810-211642.mp4,other,,普通苗族婚礼或仪式现场记录；没有解释可迁移知识、历史因果、方法原理或明确文娱/生活/新闻等更强领域归属；不能只因出现传统、习俗、文化等词归为 knowledge。

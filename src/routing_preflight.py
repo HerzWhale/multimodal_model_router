@@ -13,7 +13,7 @@ import argparse
 import json
 import math
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,55 @@ DEFAULT_EXPECTED_TASK_TYPES = (
     "text_analysis",
     "summary_merge",
 )
+
+DEFAULT_MAX_PRICE_AGE_DAYS = 7
+TRUSTED_PRICE_CONFIDENCES = {
+    "official_public_page",
+    "call_level_reconciled",
+    "period_level_reconciled",
+}
+EXPLAINABLE_PRICE_CONFIDENCES = {
+    "mock_only",
+    "local_external_api_zero",
+}
+LOCAL_RUNTIME_PROVIDERS = {"paddlepaddle"}
+LOCAL_RUNTIME_MODEL_PREFIXES = ("PP-OCR",)
+
+
+def _latency_runtime_type(provider: Any, model_name: Any) -> str:
+    """把一次调用归入延迟来源类型：真实 API、本地运行或 mock 占位。"""
+
+    model_text = str(model_name or "")
+    provider_text = str(provider or "").lower()
+    if is_mock_model(model_text):
+        return "mock"
+    if provider_text in LOCAL_RUNTIME_PROVIDERS or model_text.startswith(LOCAL_RUNTIME_MODEL_PREFIXES):
+        return "local_runtime"
+    return "real_api"
+
+
+def _p95_or_unknown(values: list[float]) -> float | str:
+    """有数据时返回 P95，没有数据时明确标记为当前数据未提供。"""
+
+    if not values:
+        return UNKNOWN_VALUE_TEXT
+    return _p95(values)
+
+
+def _latency_interpretation(task_type: str, stats: dict[str, Any]) -> str:
+    """根据真实 API、本地运行和 mock 占比解释某个任务的延迟口径。"""
+
+    if stats["mock_call_count"] and not stats["real_call_count"]:
+        return "该任务当前只有 mock 延迟，不能用于判断真实供应商性能。"
+    if stats["local_runtime_call_count"] and not stats["real_api_call_count"]:
+        return "该任务延迟主要来自本地运行环境，例如本机 CPU 推理、模型加载、图片分辨率和版面复杂度。"
+    if stats["real_api_call_count"] and not stats["local_runtime_call_count"] and not stats["mock_call_count"]:
+        return "该任务延迟来自真实外部 API 调用，可作为受控样本下的供应商延迟证据，但不能直接外推为 SLA。"
+    if stats["real_api_call_count"] and stats["mock_call_count"]:
+        return "该任务同时包含真实 API 和 mock 延迟，整体 P95 只能用于发现风险，不能直接代表单一供应商表现。"
+    if stats["local_runtime_call_count"] and stats["mock_call_count"]:
+        return "该任务同时包含本地运行和 mock 延迟，应优先查看本地运行 P95，mock 0ms 不代表真实能力。"
+    return "该任务延迟来源混合或样本不足，需要拆分后再解释。"
 
 
 def build_workload_profile(
@@ -124,16 +173,6 @@ def build_workload_profile(
                 "quantity": estimated_text_analysis_output_tokens,
             },
         ]
-        expected_units_by_task["summary_merge"] = [
-            {
-                "unit_type": "input_tokens",
-                "quantity": 0,
-            },
-            {
-                "unit_type": "output_tokens",
-                "quantity": 0,
-            },
-        ]
 
     warnings = _workload_profile_warnings(
         video_file_count=video_file_count,
@@ -163,7 +202,7 @@ def build_workload_profile(
             "expected_output_tokens_per_file": expected_output_tokens_per_file,
             "estimated_evidence_tokens_per_image": estimated_evidence_tokens_per_image,
             "estimated_evidence_tokens_per_video": estimated_evidence_tokens_per_video,
-            "summary_merge_units": "默认按 0 估算；只有长文本切分后需要汇总时才应额外覆盖。",
+            "summary_merge_units": "当前 workload 画像不默认生成汇总任务；只有长文本切分后需要跨片段汇总时才应显式提供。",
         },
         "files": files,
         "warning_messages": warnings,
@@ -236,6 +275,13 @@ def _latency_profile_warnings(
     ]
     if mock_tasks:
         warnings.append(f"以下任务的历史延迟包含 mock 调用：{', '.join(mock_tasks)}；这些延迟不能代表真实供应商性能。")
+    local_runtime_tasks = [
+        task_type
+        for task_type, stats in task_latency_stats.items()
+        if stats.get("local_runtime_call_count", 0) > 0
+    ]
+    if local_runtime_tasks:
+        warnings.append(f"以下任务包含本地运行延迟：{', '.join(local_runtime_tasks)}；这些延迟反映本机环境，不等同于云端 API SLA。")
     return warnings
 
 
@@ -251,7 +297,12 @@ def build_historical_latency_profile(
     status_set = set(status_filter or [])
     latency_by_task: dict[str, list[float]] = {}
     real_call_count_by_task: dict[str, int] = {}
+    real_api_call_count_by_task: dict[str, int] = {}
+    local_runtime_call_count_by_task: dict[str, int] = {}
     mock_call_count_by_task: dict[str, int] = {}
+    real_api_latency_by_task: dict[str, list[float]] = {}
+    local_runtime_latency_by_task: dict[str, list[float]] = {}
+    mock_latency_by_task: dict[str, list[float]] = {}
     models_by_task: dict[str, set[str]] = {}
     source_summaries: list[dict[str, Any]] = []
     skipped_records = 0
@@ -271,10 +322,18 @@ def build_historical_latency_profile(
             models_by_task.setdefault(task_type, set()).add(
                 f"{record.get('provider', UNKNOWN_VALUE_TEXT)}/{record.get('model_name', UNKNOWN_VALUE_TEXT)}"
             )
-            if is_mock_model(str(record.get("model_name") or "")):
+            runtime_type = _latency_runtime_type(record.get("provider"), record.get("model_name"))
+            if runtime_type == "mock":
                 mock_call_count_by_task[task_type] = mock_call_count_by_task.get(task_type, 0) + 1
+                mock_latency_by_task.setdefault(task_type, []).append(latency_ms)
+            elif runtime_type == "local_runtime":
+                real_call_count_by_task[task_type] = real_call_count_by_task.get(task_type, 0) + 1
+                local_runtime_call_count_by_task[task_type] = local_runtime_call_count_by_task.get(task_type, 0) + 1
+                local_runtime_latency_by_task.setdefault(task_type, []).append(latency_ms)
             else:
                 real_call_count_by_task[task_type] = real_call_count_by_task.get(task_type, 0) + 1
+                real_api_call_count_by_task[task_type] = real_api_call_count_by_task.get(task_type, 0) + 1
+                real_api_latency_by_task.setdefault(task_type, []).append(latency_ms)
             used_records += 1
         source_summaries.append(
             {
@@ -286,15 +345,22 @@ def build_historical_latency_profile(
 
     task_latency_stats = {}
     for task_type, values in sorted(latency_by_task.items()):
-        task_latency_stats[task_type] = {
+        stats = {
             "call_count": len(values),
             "real_call_count": real_call_count_by_task.get(task_type, 0),
+            "real_api_call_count": real_api_call_count_by_task.get(task_type, 0),
+            "local_runtime_call_count": local_runtime_call_count_by_task.get(task_type, 0),
             "mock_call_count": mock_call_count_by_task.get(task_type, 0),
             "avg_latency_ms": _average(values),
             "p95_latency_ms": _p95(values),
             "max_latency_ms": max(values),
+            "real_api_p95_latency_ms": _p95_or_unknown(real_api_latency_by_task.get(task_type, [])),
+            "local_runtime_p95_latency_ms": _p95_or_unknown(local_runtime_latency_by_task.get(task_type, [])),
+            "mock_p95_latency_ms": _p95_or_unknown(mock_latency_by_task.get(task_type, [])),
             "models": sorted(models_by_task.get(task_type, set())),
         }
+        stats["latency_interpretation"] = _latency_interpretation(task_type, stats)
+        task_latency_stats[task_type] = stats
 
     warnings = _latency_profile_warnings(
         task_latency_stats=task_latency_stats,
@@ -316,6 +382,246 @@ def build_historical_latency_profile(
         "skipped_records": skipped_records,
         "warning_messages": warnings,
     }
+
+
+def build_latency_bottleneck_analysis(
+    latency_profile: dict[str, Any] | None,
+    *,
+    p95_latency_limit_ms: Any = None,
+    task_latency_targets_ms: dict[str, Any] | None = None,
+    expected_task_types: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    """把历史延迟拆成真实 API、本地运行和 mock 三类，避免混用口径。"""
+
+    raw_task_latency_stats = latency_profile.get("task_latency_stats", {}) if latency_profile else {}
+    if expected_task_types is None:
+        task_latency_stats = raw_task_latency_stats
+    else:
+        expected_task_set = {str(task_type) for task_type in expected_task_types}
+        task_latency_stats = {
+            task_type: stats
+            for task_type, stats in raw_task_latency_stats.items()
+            if task_type in expected_task_set
+        }
+    latency_limit = _as_optional_float(p95_latency_limit_ms)
+    if latency_limit is not None and not math.isfinite(latency_limit):
+        latency_limit = None
+    normalized_task_targets = _normalize_task_latency_targets(task_latency_targets_ms)
+    has_latency_limit = latency_limit is not None or bool(normalized_task_targets)
+
+    real_api_slow_tasks: list[dict[str, Any]] = []
+    local_runtime_slow_tasks: list[dict[str, Any]] = []
+    mock_latency_unusable_tasks: list[dict[str, Any]] = []
+    top_latency_tasks: list[dict[str, Any]] = []
+
+    for task_type, stats in sorted(
+        task_latency_stats.items(),
+        key=lambda item: _safe_sort_latency(item[1].get("p95_latency_ms")),
+        reverse=True,
+    ):
+        p95_latency = stats.get("p95_latency_ms", UNKNOWN_VALUE_TEXT)
+        task_latency_limit = _latency_limit_for_task(task_type, normalized_task_targets, latency_limit)
+        top_latency_tasks.append(
+            {
+                "task_type": task_type,
+                "p95_latency_ms": p95_latency,
+                "latency_target_ms": task_latency_limit if task_latency_limit is not None else UNKNOWN_VALUE_TEXT,
+                "latency_interpretation": stats.get("latency_interpretation", UNKNOWN_VALUE_TEXT),
+            }
+        )
+
+        real_api_p95 = _finite_optional_float(stats.get("real_api_p95_latency_ms"))
+        if real_api_p95 is not None and _is_latency_over_limit(real_api_p95, task_latency_limit):
+            real_api_slow_tasks.append(
+                {
+                    "task_type": task_type,
+                    "p95_latency_ms": real_api_p95,
+                    "latency_target_ms": task_latency_limit if task_latency_limit is not None else UNKNOWN_VALUE_TEXT,
+                    "call_count": stats.get("real_api_call_count", 0),
+                    "evidence_level": "real_external_api",
+                    "reason": "真实外部 API 调用耗时超过当前 P95 目标，可能包含网络往返、供应商排队、模型生成和提示词长度影响。",
+                }
+            )
+
+        local_runtime_p95 = _finite_optional_float(stats.get("local_runtime_p95_latency_ms"))
+        if local_runtime_p95 is not None and _is_latency_over_limit(local_runtime_p95, task_latency_limit):
+            local_runtime_slow_tasks.append(
+                {
+                    "task_type": task_type,
+                    "p95_latency_ms": local_runtime_p95,
+                    "latency_target_ms": task_latency_limit if task_latency_limit is not None else UNKNOWN_VALUE_TEXT,
+                    "call_count": stats.get("local_runtime_call_count", 0),
+                    "evidence_level": "real_local_runtime",
+                    "reason": "本地运行耗时超过当前 P95 目标，主要反映本机 CPU、模型加载、图片分辨率、小字号和版面复杂度，不代表云端 OCR 供应商 SLA。",
+                }
+            )
+
+        if int(stats.get("mock_call_count", 0) or 0) > 0:
+            mock_latency_unusable_tasks.append(
+                {
+                    "task_type": task_type,
+                    "mock_call_count": stats.get("mock_call_count", 0),
+                    "mock_p95_latency_ms": stats.get("mock_p95_latency_ms", UNKNOWN_VALUE_TEXT),
+                    "evidence_level": "mock_placeholder",
+                    "reason": "mock 延迟只能说明代码分支跑通，不能用于证明真实模型速度，也不能用于供应商选型。",
+                }
+            )
+
+    root_cause_summary = _latency_root_cause_summary(
+        real_api_slow_tasks=real_api_slow_tasks,
+        local_runtime_slow_tasks=local_runtime_slow_tasks,
+        mock_latency_unusable_tasks=mock_latency_unusable_tasks,
+        has_latency_limit=has_latency_limit,
+        has_latency_data=bool(task_latency_stats),
+    )
+    recommended_next_actions = _latency_next_actions(
+        real_api_slow_tasks=real_api_slow_tasks,
+        local_runtime_slow_tasks=local_runtime_slow_tasks,
+        mock_latency_unusable_tasks=mock_latency_unusable_tasks,
+        has_latency_limit=has_latency_limit,
+        has_latency_data=bool(task_latency_stats),
+    )
+
+    return {
+        "analysis_type": "routing_preflight_latency_bottleneck",
+        "p95_latency_limit_ms": latency_limit if latency_limit is not None else UNKNOWN_VALUE_TEXT,
+        "task_latency_targets_ms": normalized_task_targets or {},
+        "bottleneck_status": _latency_bottleneck_status(
+            real_api_slow_tasks=real_api_slow_tasks,
+            local_runtime_slow_tasks=local_runtime_slow_tasks,
+            mock_latency_unusable_tasks=mock_latency_unusable_tasks,
+            has_latency_limit=has_latency_limit,
+            has_latency_data=bool(task_latency_stats),
+        ),
+        "real_api_slow_tasks": real_api_slow_tasks,
+        "local_runtime_slow_tasks": local_runtime_slow_tasks,
+        "mock_latency_unusable_tasks": mock_latency_unusable_tasks,
+        "top_latency_tasks": top_latency_tasks[:5],
+        "root_cause_summary": root_cause_summary,
+        "recommended_next_actions": recommended_next_actions,
+    }
+
+
+def _finite_optional_float(value: Any) -> float | None:
+    """安全读取有限浮点数；未知、NaN 和 Infinity 都不参与延迟阈值判断。"""
+
+    number = _as_optional_float(value)
+    if number is None or not math.isfinite(number):
+        return None
+    return number
+
+
+def _normalize_task_latency_targets(task_latency_targets_ms: dict[str, Any] | None) -> dict[str, float]:
+    """把任务级 P95 延迟目标标准化为可比较的数字字典。"""
+
+    if not isinstance(task_latency_targets_ms, dict):
+        return {}
+    normalized: dict[str, float] = {}
+    for task_type, raw_limit in task_latency_targets_ms.items():
+        limit = _finite_optional_float(raw_limit)
+        if limit is not None and limit >= 0:
+            normalized[str(task_type)] = limit
+    return normalized
+
+
+def _latency_limit_for_task(
+    task_type: str,
+    task_latency_targets_ms: dict[str, float],
+    global_latency_limit_ms: float | None,
+) -> float | None:
+    """优先读取任务级 P95 目标；没有配置时使用全局目标兜底。"""
+
+    if task_type in task_latency_targets_ms:
+        return task_latency_targets_ms[task_type]
+    return global_latency_limit_ms
+
+
+def _safe_sort_latency(value: Any) -> float:
+    """给延迟排序使用的安全数值。"""
+
+    number = _finite_optional_float(value)
+    return number if number is not None else 0.0
+
+
+def _is_latency_over_limit(value: float, latency_limit: float | None) -> bool:
+    """判断延迟是否超过目标；没有目标时不硬判失败。"""
+
+    if latency_limit is None:
+        return False
+    return value > latency_limit
+
+
+def _latency_bottleneck_status(
+    *,
+    real_api_slow_tasks: list[dict[str, Any]],
+    local_runtime_slow_tasks: list[dict[str, Any]],
+    mock_latency_unusable_tasks: list[dict[str, Any]],
+    has_latency_limit: bool,
+    has_latency_data: bool,
+) -> str:
+    """生成延迟归因状态。"""
+
+    if not has_latency_data or not has_latency_limit:
+        return "unknown"
+    if real_api_slow_tasks or local_runtime_slow_tasks:
+        return "fail"
+    if mock_latency_unusable_tasks:
+        return "warning"
+    return "pass"
+
+
+def _latency_root_cause_summary(
+    *,
+    real_api_slow_tasks: list[dict[str, Any]],
+    local_runtime_slow_tasks: list[dict[str, Any]],
+    mock_latency_unusable_tasks: list[dict[str, Any]],
+    has_latency_limit: bool,
+    has_latency_data: bool,
+) -> list[str]:
+    """生成延迟慢因摘要。"""
+
+    if not has_latency_data:
+        return ["当前没有可用历史延迟数据，无法判断慢因。"]
+    if not has_latency_limit:
+        return ["当前没有 P95 延迟目标，只能展示历史延迟，不能判断是否阻塞。"]
+
+    summary: list[str] = []
+    if local_runtime_slow_tasks:
+        summary.append("本地 OCR 慢主要来自 PaddleOCR 本机推理链路，受 CPU、模型加载、图片分辨率、小字号、低对比度和版面复杂度影响。")
+    if real_api_slow_tasks:
+        summary.append("真实 API 慢主要来自外部网络请求和供应商模型处理链路，可作为受控样本证据，但样本量不足时不能外推为稳定 SLA。")
+    if mock_latency_unusable_tasks:
+        summary.append("mock 任务的 0ms 或极低延迟只说明占位分支执行成功，不能证明视觉理解、语音识别或其他供应商真实速度。")
+    if not summary:
+        summary.append("当前历史延迟没有超过 P95 目标的真实或本地运行任务，但仍需注意样本规模和运行环境差异。")
+    return summary
+
+
+def _latency_next_actions(
+    *,
+    real_api_slow_tasks: list[dict[str, Any]],
+    local_runtime_slow_tasks: list[dict[str, Any]],
+    mock_latency_unusable_tasks: list[dict[str, Any]],
+    has_latency_limit: bool,
+    has_latency_data: bool,
+) -> list[str]:
+    """根据慢因给出下一步动作，避免直接扩大运行。"""
+
+    if not has_latency_data:
+        return ["先提供历史 model_calls.jsonl 或做受控小样本试跑，再判断延迟瓶颈。"]
+    if not has_latency_limit:
+        return ["先明确本轮 P95 延迟目标，再判断是否阻塞。"]
+
+    actions: list[str] = []
+    if local_runtime_slow_tasks:
+        actions.append("OCR 先继续小批量受控运行，单独记录本地 OCR 耗时；不要把本地 PaddleOCR 延迟当作云端 OCR 供应商结论。")
+    if real_api_slow_tasks:
+        actions.append("真实 API 任务单独做小样本延迟复测，控制提示词长度、输入规模和调用时间窗口，避免和 OCR 慢因混在一起。")
+    if mock_latency_unusable_tasks:
+        actions.append("mock 任务暂不参与供应商延迟判断；如果要比较视觉理解或语音识别速度，必须先接入真实模型并单独授权试跑。")
+    if not actions:
+        actions.append("当前可以继续小批量扩大，但每轮只增加一个变量，例如只增加图片数量或只放开一个真实模型。")
+    return actions
 
 
 def apply_backend_overrides(
@@ -408,6 +714,38 @@ def _workload_profile_warnings(
     return warnings
 
 
+def _expected_task_types_from_workload_profile(workload_profile: dict[str, Any] | None) -> list[str] | None:
+    """根据本批次输入类型推导实际会触发的任务类型。"""
+
+    if workload_profile is None:
+        return None
+
+    media_counts = workload_profile.get("media_type_counts") or {}
+    text_count = int(media_counts.get("text", 0) or 0)
+    image_count = int(media_counts.get("image", 0) or 0)
+    video_count = int(media_counts.get("video", 0) or 0)
+    total_files = int(workload_profile.get("total_files", text_count + image_count + video_count) or 0)
+
+    task_types: list[str] = []
+    if image_count > 0 or video_count > 0:
+        task_types.extend(["ocr", "visual_understanding"])
+    if video_count > 0:
+        task_types.append("speech_to_text")
+    if total_files > 0 or text_count > 0:
+        task_types.append("text_analysis")
+    return task_types
+
+
+def _has_positive_units(expected_units: Any) -> bool:
+    """判断显式预估用量是否表示任务确实会执行。"""
+
+    for unit in _normalize_units(expected_units):
+        quantity = _find_unit_quantity([unit], str(unit.get("unit_type", "")))
+        if quantity is not None and quantity > 0:
+            return True
+    return False
+
+
 def build_preflight_report(
     *,
     routing_rules: dict[str, dict[str, str]],
@@ -420,13 +758,22 @@ def build_preflight_report(
     workload_profile: dict[str, Any] | None = None,
     latency_profile: dict[str, Any] | None = None,
     generated_at: str | None = None,
+    max_price_age_days: int = DEFAULT_MAX_PRICE_AGE_DAYS,
     source_files: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """生成路由预检查报告。"""
 
-    task_types = list(expected_task_types or DEFAULT_EXPECTED_TASK_TYPES)
+    report_generated_at = generated_at or datetime.now().astimezone().isoformat(timespec="seconds")
     constraints = build_constraints(policy_name, policy_overrides)
     units_by_task = expected_units_by_task or {}
+    if expected_task_types is not None:
+        task_types = list(expected_task_types)
+    else:
+        workload_task_types = _expected_task_types_from_workload_profile(workload_profile)
+        task_types = workload_task_types if workload_task_types is not None else list(DEFAULT_EXPECTED_TASK_TYPES)
+        for task_type, expected_units in units_by_task.items():
+            if task_type not in task_types and _has_positive_units(expected_units):
+                task_types.append(task_type)
     latency_by_task = historical_p95_latency_by_task_ms or {}
 
     current_route = [
@@ -439,9 +786,25 @@ def build_preflight_report(
         )
         for task_type in task_types
     ]
-    route_summary = _summarize_route(current_route)
+    task_latency_target_checks = _build_task_latency_target_checks(current_route, constraints)
+    route_summary = _summarize_route(
+        current_route,
+        task_latency_target_checks=task_latency_target_checks,
+        task_latency_targets_ms=constraints.get("task_latency_targets_ms"),
+    )
+    price_catalog_profile = build_price_catalog_profile(
+        current_route,
+        generated_at=report_generated_at,
+        max_price_age_days=max_price_age_days,
+    )
     constraint_checks = _build_constraint_checks(route_summary, constraints)
-    preflight_status = _overall_preflight_status(current_route, constraint_checks)
+    preflight_status = _overall_preflight_status(current_route, constraint_checks, price_catalog_profile)
+    latency_bottleneck_analysis = build_latency_bottleneck_analysis(
+        latency_profile,
+        p95_latency_limit_ms=constraints.get("p95_latency_limit_ms"),
+        task_latency_targets_ms=constraints.get("task_latency_targets_ms"),
+        expected_task_types=task_types,
+    )
     controlled_trial_plan = _build_controlled_trial_plan(
         preflight_status=preflight_status,
         route_summary=route_summary,
@@ -454,18 +817,21 @@ def build_preflight_report(
         "schema_version": "v1",
         "report_type": "routing_preflight",
         "policy_name": policy_name,
-        "generated_at": generated_at or datetime.now().astimezone().isoformat(timespec="seconds"),
+        "generated_at": report_generated_at,
         "source_files": source_files or {},
         "expected_task_types": task_types,
         "workload_profile": workload_profile,
         "latency_profile": latency_profile,
+        "latency_bottleneck_analysis": latency_bottleneck_analysis,
+        "task_latency_target_checks": task_latency_target_checks,
+        "price_catalog_profile": price_catalog_profile,
         "constraints": constraints,
         "current_route": current_route,
         "route_summary": route_summary,
         "constraint_checks": constraint_checks,
         "preflight_status": preflight_status,
         "blocking_reasons": _blocking_reasons(current_route, constraint_checks),
-        "warning_messages": _warning_messages(current_route, constraint_checks),
+        "warning_messages": _warning_messages(current_route, constraint_checks, price_catalog_profile),
         "estimated_cost_scope": _estimated_cost_scope(route_summary),
         "controlled_trial_plan": controlled_trial_plan,
         "recommended_action": _recommended_action(preflight_status, route_summary, constraint_checks),
@@ -494,6 +860,7 @@ def build_preflight_from_files(
     policy_overrides: dict[str, Any] | None = None,
     ocr_backend: str | None = None,
     text_analysis_backend: str | None = None,
+    max_price_age_days: int = DEFAULT_MAX_PRICE_AGE_DAYS,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     """从本地配置文件生成预检查报告。"""
@@ -555,6 +922,7 @@ def build_preflight_from_files(
         workload_profile=workload_profile,
         latency_profile=latency_profile,
         generated_at=generated_at,
+        max_price_age_days=max_price_age_days,
         source_files={
             "routing_rules": str(routing_rules_file),
             "model_prices": str(model_prices_file),
@@ -597,6 +965,9 @@ def _build_route_entry(
             "route_status": "missing",
             "is_mock": UNKNOWN_VALUE_TEXT,
             "price_status": "unknown",
+            "price_source": UNKNOWN_VALUE_TEXT,
+            "price_updated_at": UNKNOWN_VALUE_TEXT,
+            "price_confidence": UNKNOWN_VALUE_TEXT,
             "pricing_summary": UNKNOWN_VALUE_TEXT,
             "estimated_cost_cny": UNKNOWN_VALUE_TEXT,
             "expected_p95_latency_ms": UNKNOWN_VALUE_TEXT,
@@ -618,6 +989,9 @@ def _build_route_entry(
         "route_status": "configured",
         "is_mock": is_mock_model(model_name),
         "price_status": "known" if price_rule else "unknown",
+        "price_source": price_rule.get("price_source", UNKNOWN_VALUE_TEXT) if price_rule else UNKNOWN_VALUE_TEXT,
+        "price_updated_at": price_rule.get("price_updated_at", UNKNOWN_VALUE_TEXT) if price_rule else UNKNOWN_VALUE_TEXT,
+        "price_confidence": price_rule.get("price_confidence", UNKNOWN_VALUE_TEXT) if price_rule else UNKNOWN_VALUE_TEXT,
         "pricing_summary": _pricing_summary(price_rule),
         "estimated_cost_cny": estimated_cost,
         "expected_p95_latency_ms": expected_p95_latency_ms if expected_p95_latency_ms is not None else UNKNOWN_VALUE_TEXT,
@@ -712,7 +1086,269 @@ def _route_risk_notes(
     return notes
 
 
-def _summarize_route(current_route: list[dict[str, Any]]) -> dict[str, Any]:
+def build_price_catalog_profile(
+    current_route: list[dict[str, Any]],
+    *,
+    generated_at: str | None = None,
+    max_price_age_days: int = DEFAULT_MAX_PRICE_AGE_DAYS,
+) -> dict[str, Any]:
+    """生成路由预检查中的价格目录画像，不联网刷新价格。"""
+
+    report_date = _parse_report_date(generated_at)
+    checked_items = []
+    warning_messages: list[str] = []
+
+    for entry in current_route:
+        if entry["route_status"] != "configured":
+            continue
+        item = _build_price_catalog_item(
+            entry,
+            report_date=report_date,
+            max_price_age_days=max_price_age_days,
+        )
+        checked_items.append(item)
+
+    stale_models = _unique_model_names(
+        item
+        for item in checked_items
+        if item["price_freshness_status"] in {"stale", "missing_updated_at", "invalid_updated_at", "future_updated_at"}
+    )
+    untrusted_models = _unique_model_names(
+        item
+        for item in checked_items
+        if item["price_confidence_status"] in {"unknown", "unverified"}
+    )
+    missing_price_models = _unique_model_names(item for item in checked_items if item["price_status"] == "unknown")
+
+    if stale_models:
+        warning_messages.append(
+            f"以下模型的价格更新时间缺失、异常或超过 {max_price_age_days} 天：{', '.join(stale_models)}；成本预估前建议先刷新价格目录。"
+        )
+    if untrusted_models:
+        warning_messages.append(
+            f"以下模型的价格可信度不足：{', '.join(untrusted_models)}；成本结论只能作为工程估算，不能当作已验证扣费。"
+        )
+    if missing_price_models:
+        warning_messages.append(
+            f"以下模型缺少价格规则：{', '.join(missing_price_models)}；对应任务无法参与预算估算。"
+        )
+
+    price_catalog_status = "warning" if warning_messages else "pass"
+    return {
+        "profile_type": "routing_preflight_price_catalog",
+        "generated_at": generated_at or datetime.now().astimezone().isoformat(timespec="seconds"),
+        "max_price_age_days": max_price_age_days,
+        "price_catalog_status": price_catalog_status,
+        "checked_model_count": len(_unique_model_names(checked_items)),
+        "stale_model_names": stale_models,
+        "untrusted_model_names": untrusted_models,
+        "missing_price_model_names": missing_price_models,
+        "checked_items": checked_items,
+        "warning_messages": warning_messages,
+    }
+
+
+def _build_price_catalog_item(
+    entry: dict[str, Any],
+    *,
+    report_date: date,
+    max_price_age_days: int,
+) -> dict[str, Any]:
+    """生成单个路由模型的价格目录检查项。"""
+
+    price_updated_at = entry.get("price_updated_at")
+    parsed_date = _parse_price_date(price_updated_at)
+    age_days: int | str
+    if parsed_date is None:
+        age_days = UNKNOWN_VALUE_TEXT
+        freshness_status = "missing_updated_at" if price_updated_at == UNKNOWN_VALUE_TEXT else "invalid_updated_at"
+    else:
+        age_days = (report_date - parsed_date).days
+        if age_days < 0:
+            freshness_status = "future_updated_at"
+        elif age_days > max_price_age_days:
+            freshness_status = "stale"
+        else:
+            freshness_status = "fresh"
+
+    confidence = str(entry.get("price_confidence") or UNKNOWN_VALUE_TEXT)
+    if confidence in TRUSTED_PRICE_CONFIDENCES:
+        confidence_status = "trusted"
+    elif confidence in EXPLAINABLE_PRICE_CONFIDENCES:
+        confidence_status = "explainable"
+    elif confidence in {UNKNOWN_VALUE_TEXT, "unknown", ""}:
+        confidence_status = "unknown"
+    else:
+        confidence_status = "unverified"
+
+    return {
+        "task_type": entry["task_type"],
+        "provider": entry["provider"],
+        "model_name": entry["model_name"],
+        "is_mock": entry["is_mock"],
+        "price_status": entry["price_status"],
+        "price_source": entry.get("price_source", UNKNOWN_VALUE_TEXT),
+        "price_updated_at": price_updated_at,
+        "price_age_days": age_days,
+        "price_freshness_status": freshness_status,
+        "price_confidence": entry.get("price_confidence", UNKNOWN_VALUE_TEXT),
+        "price_confidence_status": confidence_status,
+    }
+
+
+def _parse_report_date(generated_at: str | None) -> date:
+    """解析报告日期；解析失败时使用当前日期。"""
+
+    if not generated_at:
+        return datetime.now().astimezone().date()
+    try:
+        return datetime.fromisoformat(generated_at).date()
+    except ValueError:
+        return datetime.now().astimezone().date()
+
+
+def _parse_price_date(value: Any) -> date | None:
+    """解析价格更新时间；无法解析时返回 None。"""
+
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if value in {None, UNKNOWN_VALUE_TEXT, ""}:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)).date()
+    except ValueError:
+        return None
+
+
+def _unique_model_names(items: Any) -> list[str]:
+    """从检查项中提取去重后的模型名称。"""
+
+    names = {
+        str(item.get("model_name"))
+        for item in items
+        if item.get("model_name") and item.get("model_name") != UNKNOWN_VALUE_TEXT
+    }
+    return sorted(names)
+
+
+def _build_task_latency_target_checks(
+    current_route: list[dict[str, Any]],
+    constraints: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """按任务类型检查 P95 延迟目标；没有任务级目标时使用全局目标兜底。"""
+
+    global_latency_limit = _finite_optional_float(constraints.get("p95_latency_limit_ms"))
+    task_latency_targets = _normalize_task_latency_targets(constraints.get("task_latency_targets_ms"))
+    checks: list[dict[str, Any]] = []
+
+    for entry in current_route:
+        if entry.get("route_status") != "configured":
+            continue
+        task_type = str(entry["task_type"])
+        observed = _finite_optional_float(entry.get("expected_p95_latency_ms"))
+        limit = _latency_limit_for_task(task_type, task_latency_targets, global_latency_limit)
+        target_source = "task_specific" if task_type in task_latency_targets else "global_fallback"
+        is_mock_route = entry.get("is_mock") is True
+        if is_mock_route:
+            evidence_level = "mock_placeholder"
+        elif entry.get("price_confidence") == "local_external_api_zero":
+            evidence_level = "local_runtime_history"
+        else:
+            evidence_level = "non_mock_history"
+
+        if limit is None:
+            checks.append(
+                {
+                    "task_type": task_type,
+                    "observed_p95_latency_ms": observed if observed is not None else UNKNOWN_VALUE_TEXT,
+                    "target_p95_latency_ms": UNKNOWN_VALUE_TEXT,
+                    "target_source": "missing",
+                    "evidence_level": evidence_level,
+                    "status": "unknown",
+                    "target_ratio": UNKNOWN_VALUE_TEXT,
+                    "reason": "当前没有任务级或全局 P95 延迟目标，不能判断该任务延迟是否满足约束。",
+                }
+            )
+            continue
+
+        if observed is None:
+            checks.append(
+                {
+                    "task_type": task_type,
+                    "observed_p95_latency_ms": UNKNOWN_VALUE_TEXT,
+                    "target_p95_latency_ms": limit,
+                    "target_source": target_source,
+                    "evidence_level": evidence_level,
+                    "status": "unknown",
+                    "target_ratio": UNKNOWN_VALUE_TEXT,
+                    "reason": "当前缺少该任务的历史 P95 延迟，不能判断是否满足任务级目标。",
+                }
+            )
+            continue
+
+        passed = observed <= limit
+        status = "warning" if is_mock_route else ("pass" if passed else "fail")
+        if is_mock_route:
+            reason = "当前观察延迟来自 mock 占位，不能证明真实供应商 P95 延迟满足目标；可继续受控试跑，但不能作为真实性能结论。"
+        elif passed:
+            reason = "满足任务级 P95 延迟目标。"
+        else:
+            reason = "超过任务级 P95 延迟目标，扩大运行前需要处理。"
+        checks.append(
+            {
+                "task_type": task_type,
+                "observed_p95_latency_ms": round(observed, 6),
+                "target_p95_latency_ms": round(limit, 6),
+                "target_source": target_source,
+                "evidence_level": evidence_level,
+                "status": status,
+                "target_ratio": round(observed / limit, 6) if limit > 0 else UNKNOWN_VALUE_TEXT,
+                "reason": reason,
+            }
+        )
+
+    return checks
+
+
+def _summarize_task_latency_target_checks(
+    checks: list[dict[str, Any]],
+    task_latency_targets_ms: Any,
+) -> dict[str, Any]:
+    """汇总任务级延迟目标检查结果。"""
+
+    statuses = {str(check["status"]) for check in checks}
+    if "fail" in statuses:
+        overall_status = "fail"
+    elif "unknown" in statuses:
+        overall_status = "unknown"
+    elif "warning" in statuses:
+        overall_status = "warning"
+    else:
+        overall_status = "pass"
+
+    known_ratios = [
+        float(check["target_ratio"])
+        for check in checks
+        if isinstance(check.get("target_ratio"), (int, float))
+    ]
+    return {
+        "target_mode": "task_specific" if isinstance(task_latency_targets_ms, dict) and task_latency_targets_ms else "global_fallback",
+        "overall_status": overall_status,
+        "failed_task_types": [check["task_type"] for check in checks if check["status"] == "fail"],
+        "unknown_task_types": [check["task_type"] for check in checks if check["status"] == "unknown"],
+        "warning_task_types": [check["task_type"] for check in checks if check["status"] == "warning"],
+        "max_target_ratio": round(max(known_ratios), 6) if known_ratios else UNKNOWN_VALUE_TEXT,
+    }
+
+
+def _summarize_route(
+    current_route: list[dict[str, Any]],
+    *,
+    task_latency_target_checks: list[dict[str, Any]] | None = None,
+    task_latency_targets_ms: Any = None,
+) -> dict[str, Any]:
     """汇总当前路由结构。"""
 
     configured = [entry for entry in current_route if entry["route_status"] == "configured"]
@@ -747,11 +1383,25 @@ def _summarize_route(current_route: list[dict[str, Any]]) -> dict[str, Any]:
             for entry in configured
             if not isinstance(entry["expected_p95_latency_ms"], (int, float))
         ],
+        "task_latency_target_summary": _summarize_task_latency_target_checks(
+            task_latency_target_checks or [],
+            task_latency_targets_ms,
+        ),
     }
 
 
 def _build_constraint_checks(route_summary: dict[str, Any], constraints: dict[str, Any]) -> list[dict[str, Any]]:
     """基于路由汇总结果生成约束检查项。"""
+
+    if constraints.get("task_latency_targets_ms"):
+        latency_constraint_check = _task_latency_constraint_check(route_summary)
+    else:
+        latency_constraint_check = _constraint_check(
+            "p95_latency_limit_ms",
+            observed_value=route_summary["max_expected_p95_latency_ms"],
+            limit_value=constraints.get("p95_latency_limit_ms"),
+            pass_when_less_or_equal=True,
+        )
 
     return [
         _constraint_check(
@@ -767,12 +1417,7 @@ def _build_constraint_checks(route_summary: dict[str, Any], constraints: dict[st
             limit_value=constraints.get("budget_limit_cny"),
             pass_when_less_or_equal=True,
         ),
-        _constraint_check(
-            "p95_latency_limit_ms",
-            observed_value=route_summary["max_expected_p95_latency_ms"],
-            limit_value=constraints.get("p95_latency_limit_ms"),
-            pass_when_less_or_equal=True,
-        ),
+        latency_constraint_check,
         _constraint_check(
             "min_real_coverage_rate",
             observed_value=route_summary["real_coverage_rate"],
@@ -780,6 +1425,34 @@ def _build_constraint_checks(route_summary: dict[str, Any], constraints: dict[st
             pass_when_less_or_equal=False,
         ),
     ]
+
+
+def _task_latency_constraint_check(route_summary: dict[str, Any]) -> dict[str, Any]:
+    """把任务级 P95 延迟检查汇总成整体延迟约束。"""
+
+    summary = route_summary.get("task_latency_target_summary", {})
+    status = str(summary.get("overall_status", "unknown"))
+    failed_tasks = summary.get("failed_task_types", [])
+    unknown_tasks = summary.get("unknown_task_types", [])
+    warning_tasks = summary.get("warning_task_types", [])
+    max_target_ratio = summary.get("max_target_ratio", UNKNOWN_VALUE_TEXT)
+
+    if status == "fail":
+        reason = f"以下任务超过各自 P95 延迟目标：{', '.join(failed_tasks)}。"
+    elif status == "unknown":
+        reason = f"以下任务缺少历史 P95 或延迟目标：{', '.join(unknown_tasks)}。"
+    elif status == "warning":
+        reason = f"以下任务只有 mock 延迟证据，不能证明真实供应商 P95 延迟达标：{', '.join(warning_tasks)}。"
+    else:
+        reason = "当前所有已配置任务都满足各自 P95 延迟目标；任务级目标优先于全局兜底目标。"
+
+    return {
+        "constraint_name": "p95_latency_limit_ms",
+        "observed_value": max_target_ratio,
+        "limit_value": "task_latency_targets_ms",
+        "status": status,
+        "reason": reason,
+    }
 
 
 def _constraint_check(
@@ -821,12 +1494,20 @@ def _constraint_check(
     }
 
 
-def _overall_preflight_status(current_route: list[dict[str, Any]], constraint_checks: list[dict[str, Any]]) -> str:
+def _overall_preflight_status(
+    current_route: list[dict[str, Any]],
+    constraint_checks: list[dict[str, Any]],
+    price_catalog_profile: dict[str, Any] | None = None,
+) -> str:
     """生成整体预检查状态。"""
 
     statuses = {check["status"] for check in constraint_checks}
     if "fail" in statuses:
         return "fail"
+    if "warning" in statuses:
+        return "warning"
+    if price_catalog_profile and price_catalog_profile.get("price_catalog_status") == "warning":
+        return "warning"
     if any(entry["is_mock"] is True for entry in current_route):
         return "warning"
     if "unknown" in statuses:
@@ -847,16 +1528,25 @@ def _blocking_reasons(current_route: list[dict[str, Any]], constraint_checks: li
     return reasons
 
 
-def _warning_messages(current_route: list[dict[str, Any]], constraint_checks: list[dict[str, Any]]) -> list[str]:
+def _warning_messages(
+    current_route: list[dict[str, Any]],
+    constraint_checks: list[dict[str, Any]],
+    price_catalog_profile: dict[str, Any] | None = None,
+) -> list[str]:
     """汇总可以继续试跑但必须解释的风险。"""
 
     warnings: list[str] = []
     mock_task_types = [entry["task_type"] for entry in current_route if entry["is_mock"] is True]
     if mock_task_types:
         warnings.append(f"当前仍有 mock 任务：{', '.join(mock_task_types)}。这些任务不能证明真实模型能力。")
+    if price_catalog_profile:
+        warnings.extend(price_catalog_profile.get("warning_messages", []))
     unknown_checks = [check["constraint_name"] for check in constraint_checks if check["status"] == "unknown"]
     if unknown_checks:
         warnings.append(f"以下约束因为数据不足无法判断：{', '.join(unknown_checks)}。")
+    warning_checks = [check["constraint_name"] for check in constraint_checks if check["status"] == "warning"]
+    if warning_checks:
+        warnings.append(f"以下约束存在非阻塞风险，不能解释成真实达标结论：{', '.join(warning_checks)}。")
     return warnings
 
 
@@ -973,7 +1663,13 @@ def _build_controlled_trial_plan(
             "task_type": task_type,
             "p95_latency_ms": stats.get("p95_latency_ms", UNKNOWN_VALUE_TEXT),
             "real_call_count": stats.get("real_call_count", 0),
+            "real_api_call_count": stats.get("real_api_call_count", 0),
+            "local_runtime_call_count": stats.get("local_runtime_call_count", 0),
             "mock_call_count": stats.get("mock_call_count", 0),
+            "real_api_p95_latency_ms": stats.get("real_api_p95_latency_ms", UNKNOWN_VALUE_TEXT),
+            "local_runtime_p95_latency_ms": stats.get("local_runtime_p95_latency_ms", UNKNOWN_VALUE_TEXT),
+            "mock_p95_latency_ms": stats.get("mock_p95_latency_ms", UNKNOWN_VALUE_TEXT),
+            "latency_interpretation": stats.get("latency_interpretation", UNKNOWN_VALUE_TEXT),
         }
         for task_type, stats in sorted(
             task_latency_stats.items(),
@@ -1062,10 +1758,23 @@ def _field_notes() -> dict[str, str]:
     return {
         "workload_profile": "运行前规模画像，用于在不调用模型的情况下统计输入文件规模，并估算各任务会消耗的计量单位。",
         "latency_profile": "历史延迟画像，用于从已有模型调用记录中提取任务级 P95 延迟，帮助运行前判断延迟约束。",
+        "latency_bottleneck_analysis": "延迟阻塞归因，用于把慢因拆成真实外部 API、本地运行和 mock 占位三类，避免把不同来源的延迟混成一个结论。",
+        "real_api_slow_tasks": "真实外部 API 慢任务，表示这些任务的历史真实网络调用 P95 超过当前目标，可用于定位供应商或请求链路风险。",
+        "local_runtime_slow_tasks": "本地运行慢任务，表示这些任务的耗时来自本机运行环境，例如 PaddleOCR 本地推理，不能直接代表云端供应商 SLA。",
+        "mock_latency_unusable_tasks": "mock 延迟不可用任务，表示这些任务虽然有延迟记录，但只是占位分支，不能用于供应商速度判断。",
+        "latency_interpretation": "单个任务延迟口径解释，用于说明该任务的 P95 来自真实 API、本地运行、mock 还是混合来源。",
+        "price_catalog_profile": "价格目录画像，用于检查本次路由涉及模型的价格来源、更新时间和可信度，避免过期或未验证价格直接支撑成本决策。",
+        "max_price_age_days": "价格过期阈值，表示价格更新时间超过多少天后需要提示先刷新价格目录。",
+        "price_freshness_status": "价格新鲜度状态，用于区分 fresh、stale、missing_updated_at、invalid_updated_at 和 future_updated_at。",
+        "price_confidence_status": "价格可信度状态，用于区分官方价格、可解释的 mock 或本地零成本假设、未知价格和未验证价格。",
         "expected_units_by_task": "按任务类型整理的预估用量，用于把单位价格转换成整批预算预估；缺少该字段时不会硬算总成本。",
         "historical_p95_latency_by_task_ms": "按任务类型整理的历史 P95 延迟，用于把历史调用经验带入运行前延迟预检查。",
         "budget_limit_cny": "本次预算上限，用于判断当前模型组合在预估用量下是否可能超出人民币预算。",
         "p95_latency_limit_ms": "P95 延迟限制，用于判断最慢的高分位任务延迟是否超过业务目标。",
+        "task_latency_targets_ms": "按任务类型配置的 P95 延迟目标，用于让 OCR、文本分析、视觉理解等不同任务使用不同延迟闸门；没有配置的任务使用全局 P95 目标兜底。",
+        "task_latency_target_checks": "任务级延迟目标检查明细，用于记录每个任务观察到的 P95、目标 P95、目标来源、证据口径和通过状态。",
+        "task_latency_target_summary": "任务级延迟目标汇总，用于把多条任务级延迟检查合并成整体预检查中的延迟约束结果。",
+        "evidence_level": "证据口径，用于区分非mock历史延迟、本地运行历史延迟和mock占位延迟，避免把mock延迟误读成真实供应商性能。",
         "min_real_coverage_rate": "最低真实模型覆盖率，用于判断当前路线中真实模型任务占比是否过低。",
         "current_route": "当前每个任务类型会走向哪个供应商和模型，用于运行前核对实际模型组合。",
         "preflight_status": "预检查总状态；pass 表示未发现阻塞，warning 表示可试跑但有未知或 mock 风险，fail 表示不建议直接运行。",
@@ -1130,8 +1839,8 @@ def render_preflight_markdown(report: dict[str, Any]) -> str:
             [
                 "## 0.1 历史延迟画像",
                 "",
-                "| 任务类型 | 调用数 | 真实调用数 | mock调用数 | 平均延迟 | P95延迟 | 最大延迟 | 模型 |",
-                "|---|---:|---:|---:|---:|---:|---:|---|",
+                "| 任务类型 | 调用数 | 真实调用数 | 真实API调用数 | 本地运行调用数 | mock调用数 | 平均延迟 | P95延迟 | 真实API P95 | 本地运行 P95 | mock P95 | 最大延迟 | 模型 | 口径解释 |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
             ]
         )
         for task_type, stats in latency_profile["task_latency_stats"].items():
@@ -1140,15 +1849,157 @@ def render_preflight_markdown(report: dict[str, Any]) -> str:
                 f"{task_type} | "
                 f"{stats['call_count']} | "
                 f"{stats['real_call_count']} | "
+                f"{stats.get('real_api_call_count', 0)} | "
+                f"{stats.get('local_runtime_call_count', 0)} | "
                 f"{stats['mock_call_count']} | "
                 f"{_format_ms(stats['avg_latency_ms'])} | "
                 f"{_format_ms(stats['p95_latency_ms'])} | "
+                f"{_format_ms(stats.get('real_api_p95_latency_ms'))} | "
+                f"{_format_ms(stats.get('local_runtime_p95_latency_ms'))} | "
+                f"{_format_ms(stats.get('mock_p95_latency_ms'))} | "
                 f"{_format_ms(stats['max_latency_ms'])} | "
-                f"{', '.join(stats['models']) or UNKNOWN_VALUE_TEXT} |"
+                f"{', '.join(stats['models']) or UNKNOWN_VALUE_TEXT} | "
+                f"{stats.get('latency_interpretation', UNKNOWN_VALUE_TEXT)} |"
             )
         if latency_profile["warning_messages"]:
             lines.extend(["", "延迟画像风险提示："])
             lines.extend(f"- {item}" for item in latency_profile["warning_messages"])
+        lines.append("")
+
+    if report.get("latency_bottleneck_analysis"):
+        analysis = report["latency_bottleneck_analysis"]
+        lines.extend(
+            [
+                "## 0.1.1 延迟阻塞归因",
+                "",
+                f"- 归因状态：`{analysis['bottleneck_status']}`",
+                f"- P95 延迟目标：{_format_ms(analysis['p95_latency_limit_ms'])}",
+                f"- 任务级 P95 目标：{_format_task_latency_targets(analysis.get('task_latency_targets_ms'))}",
+                "",
+            ]
+        )
+        if analysis.get("root_cause_summary"):
+            lines.extend(["根因摘要：", ""])
+            lines.extend(f"- {item}" for item in analysis["root_cause_summary"])
+            lines.append("")
+
+        if analysis.get("local_runtime_slow_tasks"):
+            lines.extend(
+                [
+                    "本地运行慢任务：",
+                    "",
+                    "| 任务类型 | P95延迟 | 调用数 | 证据口径 | 原因解释 |",
+                    "|---|---:|---:|---|---|",
+                ]
+            )
+            for item in analysis["local_runtime_slow_tasks"]:
+                lines.append(
+                    "| "
+                    f"{item['task_type']} | "
+                    f"{_format_ms(item['p95_latency_ms'])} | "
+                    f"{item['call_count']} | "
+                    f"{item['evidence_level']} | "
+                    f"{item['reason']} |"
+                )
+            lines.append("")
+
+        if analysis.get("real_api_slow_tasks"):
+            lines.extend(
+                [
+                    "真实 API 慢任务：",
+                    "",
+                    "| 任务类型 | P95延迟 | 调用数 | 证据口径 | 原因解释 |",
+                    "|---|---:|---:|---|---|",
+                ]
+            )
+            for item in analysis["real_api_slow_tasks"]:
+                lines.append(
+                    "| "
+                    f"{item['task_type']} | "
+                    f"{_format_ms(item['p95_latency_ms'])} | "
+                    f"{item['call_count']} | "
+                    f"{item['evidence_level']} | "
+                    f"{item['reason']} |"
+                )
+            lines.append("")
+
+        if analysis.get("mock_latency_unusable_tasks"):
+            lines.extend(
+                [
+                    "mock 延迟不可用任务：",
+                    "",
+                    "| 任务类型 | mock调用数 | mock P95 | 证据口径 | 为什么不能用于判断 |",
+                    "|---|---:|---:|---|---|",
+                ]
+            )
+            for item in analysis["mock_latency_unusable_tasks"]:
+                lines.append(
+                    "| "
+                    f"{item['task_type']} | "
+                    f"{item['mock_call_count']} | "
+                    f"{_format_ms(item['mock_p95_latency_ms'])} | "
+                    f"{item['evidence_level']} | "
+                    f"{item['reason']} |"
+                )
+            lines.append("")
+
+        if analysis.get("recommended_next_actions"):
+            lines.extend(["下一步建议：", ""])
+            lines.extend(f"- {item}" for item in analysis["recommended_next_actions"])
+            lines.append("")
+
+    if report.get("task_latency_target_checks"):
+        lines.extend(
+            [
+                "## 0.1.2 任务级延迟目标检查",
+                "",
+                "| 任务类型 | 观察到的P95延迟 | 目标P95延迟 | 目标来源 | 证据口径 | 状态 | 说明 |",
+                "|---|---:|---:|---|---|---|---|",
+            ]
+        )
+        for check in report["task_latency_target_checks"]:
+            lines.append(
+                "| "
+                f"{check['task_type']} | "
+                f"{_format_ms(check['observed_p95_latency_ms'])} | "
+                f"{_format_ms(check['target_p95_latency_ms'])} | "
+                f"{check['target_source']} | "
+                f"{check.get('evidence_level', UNKNOWN_VALUE_TEXT)} | "
+                f"{check['status']} | "
+                f"{check['reason']} |"
+            )
+        lines.append("")
+
+    if report.get("price_catalog_profile"):
+        price_profile = report["price_catalog_profile"]
+        lines.extend(
+            [
+                "## 0.2 价格目录画像",
+                "",
+                "| 指标 | 值 | 含义 |",
+                "|---|---:|---|",
+                f"| 检查模型数 | {price_profile['checked_model_count']} | 本次路由涉及并进入价格目录检查的模型数量 |",
+                f"| 价格目录状态 | {price_profile['price_catalog_status']} | pass 表示未发现价格目录风险，warning 表示成本结论需要谨慎解释 |",
+                f"| 价格过期阈值 | {price_profile['max_price_age_days']} 天 | 超过该天数会提示先刷新价格目录 |",
+                "",
+                "| 任务类型 | 模型 | 价格来源 | 更新时间 | 价格年龄 | 新鲜度 | 可信度 |",
+                "|---|---|---|---|---:|---|---|",
+            ]
+        )
+        for item in price_profile["checked_items"]:
+            lines.append(
+                "| "
+                f"{item['task_type']} | "
+                f"{item['model_name']} | "
+                f"{item['price_source']} | "
+                f"{item['price_updated_at']} | "
+                f"{_format_value(item['price_age_days'])} | "
+                f"{item['price_freshness_status']} | "
+                f"{item['price_confidence_status']} |"
+            )
+        if price_profile["warning_messages"]:
+            lines.extend(["", "价格目录风险提示："])
+            lines.extend(f"- {item}" for item in price_profile["warning_messages"])
         lines.append("")
 
     lines.extend(
@@ -1239,8 +2090,8 @@ def render_preflight_markdown(report: dict[str, Any]) -> str:
                 [
                     "慢任务证据：",
                     "",
-                    "| 任务类型 | P95延迟 | 真实调用数 | mock调用数 | 含义 |",
-                    "|---|---:|---:|---:|---|",
+                    "| 任务类型 | P95延迟 | 真实API P95 | 本地运行 P95 | mock P95 | 真实API调用数 | 本地运行调用数 | mock调用数 | 含义 |",
+                    "|---|---:|---:|---:|---:|---:|---:|---:|---|",
                 ]
             )
             for item in controlled_trial_plan["slow_task_evidence"]:
@@ -1248,9 +2099,13 @@ def render_preflight_markdown(report: dict[str, Any]) -> str:
                     "| "
                     f"{item['task_type']} | "
                     f"{_format_ms(item['p95_latency_ms'])} | "
-                    f"{item['real_call_count']} | "
+                    f"{_format_ms(item.get('real_api_p95_latency_ms'))} | "
+                    f"{_format_ms(item.get('local_runtime_p95_latency_ms'))} | "
+                    f"{_format_ms(item.get('mock_p95_latency_ms'))} | "
+                    f"{item.get('real_api_call_count', 0)} | "
+                    f"{item.get('local_runtime_call_count', 0)} | "
                     f"{item['mock_call_count']} | "
-                    "用于判断该任务是否是继续扩大运行前的延迟阻塞 |"
+                    f"{item.get('latency_interpretation', '用于判断该任务是否是继续扩大运行前的延迟阻塞')} |"
                 )
             lines.append("")
         lines.extend(["建议命令：", ""])
@@ -1326,6 +2181,15 @@ def _format_ms(value: Any) -> str:
     if value in {None, UNKNOWN_VALUE_TEXT}:
         return UNKNOWN_VALUE_TEXT
     return f"{float(value):.0f} ms"
+
+
+def _format_task_latency_targets(value: Any) -> str:
+    """格式化任务级 P95 延迟目标。"""
+
+    if not isinstance(value, dict) or not value:
+        return UNKNOWN_VALUE_TEXT
+    parts = [f"{task_type}={_format_ms(limit)}" for task_type, limit in sorted(value.items())]
+    return "；".join(parts)
 
 
 def _format_percent(value: Any) -> str:
@@ -1410,6 +2274,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--expected-output-tokens-per-file", type=int, default=300, help="每个文件预计生成的文本输出 token 数。")
     parser.add_argument("--estimated-evidence-tokens-per-image", type=int, default=300, help="每张图片上游证据预计转成的文本 token 数。")
     parser.add_argument("--estimated-evidence-tokens-per-video", type=int, default=800, help="每个视频上游证据预计转成的文本 token 数。")
+    parser.add_argument("--max-price-age-days", type=int, default=DEFAULT_MAX_PRICE_AGE_DAYS, help="价格目录过期阈值；超过该天数会在预检查报告中提示先刷新价格目录。")
     parser.add_argument("--budget-limit-cny", type=float, help="本轮预检查使用的预算上限，单位人民币。")
     parser.add_argument("--p95-latency-limit-ms", type=float, help="本轮预检查使用的 P95 延迟上限，单位毫秒。")
     parser.add_argument("--min-real-coverage-rate", type=float, help="本轮预检查使用的最低真实模型覆盖率。")
@@ -1441,6 +2306,7 @@ def main(argv: list[str] | None = None) -> int:
         policy_overrides=_build_policy_overrides_from_args(args),
         ocr_backend=args.ocr_backend,
         text_analysis_backend=args.text_analysis_backend,
+        max_price_age_days=args.max_price_age_days,
     )
     output_paths = write_preflight_reports(args.output_dir, report)
     print(json.dumps(output_paths, ensure_ascii=False, indent=2))

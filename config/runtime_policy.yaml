@@ -1,0 +1,210 @@
+file_extensions:
+  text:
+    - .txt
+    - .text
+    - .md
+    - .csv
+    - .tsv
+    - .json
+    - .jsonl
+    - .yaml
+    - .yml
+    - .xml
+    - .html
+    - .htm
+    - .srt
+    - .vtt
+    - .log
+  image:
+    - .jpg
+    - .jpeg
+    - .png
+    - .bmp
+    - .webp
+    - .jfif
+    - .tif
+    - .tiff
+  video:
+    - .mp4
+    - .mov
+    - .avi
+    - .mkv
+    - .webm
+    - .flv
+    - .m4v
+    - .wmv
+    - .mpg
+    - .mpeg
+    - .3gp
+    - .3g2
+    - .mts
+    - .m2ts
+    - .ts
+
+runtime_backends:
+  ocr:
+    - mock
+    - paddleocr
+  vision_understanding:
+    - mock
+    - qwen_vl
+  speech_to_text:
+    - mock
+    - dashscope_asr
+  text_analysis:
+    - mock
+    - deepseek
+
+video_preprocessing:
+  default_max_keyframes: 3
+  early_frame_ratio: 0.05
+  audio_sample_rate_hz: 16000
+  audio_channels: 1
+  ffmpeg_timeout_seconds: 120
+  process_error_preview_chars: 300
+  keyframe_sampling_strategy: start_early_then_spaced
+
+ocr_quality_gate:
+  min_lines: 6
+  max_visible_chars: 80
+  min_short_line_ratio: 0.7
+  min_single_char_line_ratio: 0.25
+  min_ascii_noise_line_ratio: 0.4
+
+topics:
+  values:
+    - news
+    - entertainment
+    - knowledge
+    - lifestyle
+    - humor
+    - gaming
+    - technology
+    - sports_health
+    - finance_business
+    - ads_marketing
+    - other
+  mock_keywords:
+    ads_marketing:
+      - 广告
+      - 带货
+      - 推广
+      - 品牌宣传
+      - 种草
+    news:
+      - 新闻
+      - 报道
+      - 突发
+      - 发布会
+      - 事件
+    finance_business:
+      - 财经
+      - 商业
+      - 成本
+      - 预算
+      - 供应商
+      - 投资
+      - 财报
+    technology:
+      - AI
+      - 模型
+      - 系统
+      - 数据
+      - 技术
+      - 软件
+      - 手机
+      - 多模态
+    sports_health:
+      - 体育
+      - 健身
+      - 运动
+      - 健康
+    entertainment:
+      - 娱乐圈
+      - 明星
+      - 综艺
+      - 影视
+      - 艺人
+      - 粉丝
+    gaming:
+      - 游戏
+      - 电竞
+      - 手游
+      - 主机游戏
+      - 游戏攻略
+      - 游戏剧情
+    humor:
+      - 搞笑
+      - 段子
+      - 趣事
+      - 反转
+      - 整活
+      - 名场面
+    lifestyle:
+      - 日常
+      - vlog
+      - 美食
+      - 旅行
+      - 穿搭
+      - 自拍
+      - 餐厅
+      - 宠物
+      - 动物
+    knowledge:
+      - 科普
+      - 教程
+      - 知识
+      - 学习
+      - 教育
+
+deepseek_prompt:
+  system: |
+    你是内容平台 AI 团队的内容结构化助手。请基于用户提供的证据生成严格 json。
+    不要编造证据中没有的信息；如果证据不足，可以保守分类。
+
+    可选 topic 只能从以下 11 类中选择一个：
+    news, entertainment, gaming, humor, knowledge, lifestyle, technology, sports_health, finance_business, ads_marketing, other。
+
+    主分类判断顺序如下。必须从上到下判断；命中更高优先级规则后，将其他交叉领域放入 secondary_topics，不要同时输出多个主分类：
+    1. ads_marketing：内容整体以品牌广告、商业合作、带货、官方推广、购买引导或营销转化为主要目的。仅在长视频或评论内容中插入一段口播广告、赞助说明或平台回收广告，不应把整条内容主分类改为 ads_marketing；此时应按主体内容分类，并可在 tags 或 summary 中说明广告植入。
+    2. news：以报道具体事件为核心，包含事件进展、时间线、当事方或官方回应、公共变化等新闻要素；即使事件发生在娱乐、科技等领域，也优先选择 news，并把相关领域放入 secondary_topics。
+    3. finance_business：财经分析、公司经营、商业思维、投资理财、财报、营收、股价、市场规模或商业风险；即使提到 AI、芯片、软件，也优先选择 finance_business。
+    4. technology：以 AI、数码、软件、硬件、汽车科技的功能发布、技术教程、产品能力或工程实现为核心。
+    5. gaming：以游戏玩法、剧情、主播实况、攻略、电竞赛事或游戏文化为核心；如果游戏只是手机、芯片或设备性能测试负载，应选择 technology。
+    6. sports_health：以体育赛事、运动、健身、身体健康或健康方法为核心。
+    7. entertainment：以娱乐圈、影视作品、综艺节目、明星艺人、粉丝互动、演唱会、线下见面会、舞台活动或文娱行业内容为核心。
+    8. humor：以搞笑段子、生活趣事、意外反转、整活、动物趣闻或轻松滑稽效果为核心；如果只是个人生活记录且没有明显搞笑效果，应选择 lifestyle。
+    9. lifestyle：以个人经历、vlog、自拍、美食、旅行、穿搭、消费体验、餐厅经历、宠物或日常分享为核心。
+    10. knowledge：面向一般受众解释可迁移的概念、原理、历史、因果关系或方法，且没有更强的财经、科技、体育健康等领域归属；仅记录某个民俗、婚礼、活动、仪式或现场片段，不应因为出现“传统”“习俗”“文化”等词就归为 knowledge。
+    11. other：以上十类都不符合时使用，包括没有明确主题领域的组织通知、办事流程、局部协作信息、普通活动记录、普通仪式记录或缺少实质信息增量的现场片段；不要为了避免 other 而强行选择相邻类别。
+
+    补充边界规则：
+    - 先判断内容主要业务场景，再判断内容对象词。
+    - 领域优先于讲解形式：财经讲解选择 finance_business，科技教程选择 technology，健身教学选择 sports_health；不能因为采用讲解、教程或说明形式就直接选择 knowledge。
+    - secondary_topics 也必须遵守领域优先规则：不能只因为内容采用讲解、教程、科普或历史梳理形式，就把 knowledge 加入副分类；只有内容同时实质讨论泛知识主题且没有更强领域吸收时，才加入 knowledge。
+    - lifestyle 必须以个人生活体验或日常分享为核心；不能因为内容涉及生活用品或日常场所，就把组织通知、办事流程或协作规则归为 lifestyle。
+    - knowledge 必须包含面向一般受众的知识解释；单纯告知时间、地点、登记步骤、操作规定，或只记录民俗婚礼、活动现场、仪式片段，不等于知识科普。
+    - other 是有效主分类。证据确实不符合前十类时应选择 other，不得用 secondary_topics 代替主分类判断。
+    - 视频主体是影视评论、烂片吐槽、明星艺人活动或文娱现场时，即使中间出现广告植入，也不应让 ads_marketing 覆盖主体分类。
+    - secondary_topics 必须是内容实质讨论对象，不能因为平台界面、搜索页、点赞评论数据、测试工具名、背景道具或单个对象词而加入副分类。
+    - 游戏如果只是手机、芯片或设备性能测试的负载，不应加入 gaming 或 entertainment；只有内容核心在游戏剧情、玩法、主播实况、电竞赛事或游戏文化时，才选择 gaming 或把 gaming 放入 secondary_topics。
+    - 手机屏幕、应用界面、搜索页、二维码、点赞评论数、播放控件等平台 UI 证据，不足以让内容进入 technology 或把 technology 加入 secondary_topics。
+    - 普通音乐、合唱、校园晚会、舞台记录或线下演出片段，如果不是围绕明星、综艺节目、影视作品、游戏文化、搞笑内容、娱乐行业新闻或商业推广，topic 应选择 other，secondary_topics 也不要填 entertainment。
+    - 餐厅、旅行、宠物、动物或日常生活场景中，如果核心是突发趣事、滑稽反转或搞笑效果，topic 应选择 humor，生活场景可放入 secondary_topics 的 lifestyle。
+
+    business_use 证据规则：
+    - 只能说明基于现有证据可以直接支持的业务动作，不得编造用户增长、收入提升、转化效果或算法效果。
+    - 只有证据明确出现品牌合作、广告合作、购买入口、下单、促销或带货时，才能建议品牌推广、广告投放、购买转化或带货用途。
+    - 仅仅出现商品、食品、设备或服务名称，不足以证明内容适合商业推广。
+    - 如果证据没有明确业务背景，使用“可用于内容归档、检索和人工复核”这类保守用途。
+
+    请输出以下 json 字段：
+    {
+      "topic": "主分类，只能一个",
+      "secondary_topics": ["副分类，最多两个，不能和 topic 重复"],
+      "tags": ["关键词，最多五个，尽量使用名词或短语"],
+      "summary": "300 字以内摘要",
+      "business_use": "这份结构化结果可以支持的业务用途"
+    }
+  compact_retry_suffix: |
+    失败重试要求：只输出最短合法 JSON；summary 控制在 80 字以内；business_use 控制在 40 字以内。

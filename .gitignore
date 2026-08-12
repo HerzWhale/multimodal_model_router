@@ -91,3 +91,6 @@ output/batch_paddleocr_keyframes_20260724_retry/image_ocr_preprocess_experiment_
 !output/batch_controlled_paddleocr_gate_20260729/**
 !output/routing_preflight_current/
 !output/routing_preflight_current/**
+
+# 本地 ASR 音频 URL 映射：可能包含临时访问地址，默认不提交
+config/asr_audio_url_map.local.json

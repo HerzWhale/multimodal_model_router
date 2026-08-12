@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ POLICY_DEFINITIONS: dict[str, dict[str, Any]] = {
         "default_constraints": {
             "budget_limit_cny": None,
             "p95_latency_limit_ms": None,
+            "task_latency_targets_ms": None,
             "min_real_coverage_rate": 0.25,
         },
     },
@@ -30,6 +32,7 @@ POLICY_DEFINITIONS: dict[str, dict[str, Any]] = {
         "default_constraints": {
             "budget_limit_cny": None,
             "p95_latency_limit_ms": 2000,
+            "task_latency_targets_ms": None,
             "min_real_coverage_rate": 0.25,
         },
     },
@@ -39,6 +42,7 @@ POLICY_DEFINITIONS: dict[str, dict[str, Any]] = {
         "default_constraints": {
             "budget_limit_cny": None,
             "p95_latency_limit_ms": None,
+            "task_latency_targets_ms": None,
             "min_real_coverage_rate": 0.7,
         },
     },
@@ -48,6 +52,7 @@ POLICY_DEFINITIONS: dict[str, dict[str, Any]] = {
         "default_constraints": {
             "budget_limit_cny": None,
             "p95_latency_limit_ms": 3500,
+            "task_latency_targets_ms": None,
             "min_real_coverage_rate": 0.4,
         },
     },
@@ -75,6 +80,7 @@ UPSTREAM_UPGRADE_PRIORITY = [
 ALLOWED_CONSTRAINT_KEYS = {
     "budget_limit_cny",
     "p95_latency_limit_ms",
+    "task_latency_targets_ms",
     "min_real_coverage_rate",
 }
 
@@ -101,8 +107,28 @@ def build_constraints(policy_name: str, overrides: dict[str, Any] | None = None)
     if overrides:
         for key, value in overrides.items():
             if value is not None:
-                constraints[key] = value
+                constraints[key] = _normalize_task_latency_targets_ms(value) if key == "task_latency_targets_ms" else value
     return constraints
+
+
+def _normalize_task_latency_targets_ms(value: Any) -> dict[str, float] | None:
+    """校验并标准化按任务类型配置的 P95 延迟目标。"""
+
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("task_latency_targets_ms 必须是字典结构。")
+
+    normalized: dict[str, float] = {}
+    for task_type, raw_limit in value.items():
+        try:
+            limit = float(raw_limit)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{task_type} 的任务级延迟目标必须是数字。") from exc
+        if not math.isfinite(limit) or limit < 0:
+            raise ValueError(f"{task_type} 的任务级延迟目标必须是非负有限数字。")
+        normalized[str(task_type)] = limit
+    return normalized
 
 
 def load_policy_config(config_path: str | Path) -> dict[str, Any]:
@@ -141,11 +167,16 @@ def normalize_policy_config(data: dict[str, Any] | None, *, source_path: str | P
         if unknown_constraints:
             raise ValueError(f"{policy_name} 包含不支持的约束字段: {', '.join(unknown_constraints)}")
 
-        policy_overrides[policy_name] = {
-            key: raw_constraints[key]
-            for key in ALLOWED_CONSTRAINT_KEYS
-            if key in raw_constraints
-        }
+        normalized_constraints: dict[str, Any] = {}
+        for key in ALLOWED_CONSTRAINT_KEYS:
+            if key not in raw_constraints:
+                continue
+            value = raw_constraints[key]
+            normalized_constraints[key] = (
+                _normalize_task_latency_targets_ms(value) if key == "task_latency_targets_ms" else value
+            )
+
+        policy_overrides[policy_name] = normalized_constraints
 
     multipliers = data.get("budget_expansion_multipliers", [2, 5, 10])
     if not isinstance(multipliers, list) or not multipliers:

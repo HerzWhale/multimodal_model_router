@@ -129,6 +129,69 @@ def _sum_by(calls: list[dict[str, Any]], key: str) -> dict[str, float]:
     return {name: round(value, 6) for name, value in sorted(totals.items())}
 
 
+def _reprice_items_by_call_id(reprice_report: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """从成本重算报告中按 call_id 建立索引。"""
+
+    if not reprice_report:
+        return {}
+    return {
+        str(item.get("call_id")): item
+        for item in reprice_report.get("reprice_items", [])
+        if item.get("call_id") and item.get("current_estimated_cost_cny") is not None
+    }
+
+
+def _apply_cost_basis(
+    calls: list[dict[str, Any]],
+    reprice_report: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """根据是否提供成本重算报告，生成策略分析使用的成本口径。"""
+
+    reprice_items = _reprice_items_by_call_id(reprice_report)
+    if not reprice_items:
+        return calls, {
+            "cost_basis": "historical_recorded",
+            "cost_basis_note": "策略报告使用历史 model_calls.jsonl 中记录的 cost_cny。",
+            "repriced_call_count": 0,
+            "changed_call_count": 0,
+            "not_repriced_call_count": 0,
+        }
+
+    result = []
+    changed_call_count = 0
+    not_repriced_call_count = 0
+    for call in calls:
+        call_id = str(call.get("call_id") or "")
+        reprice_item = reprice_items.get(call_id)
+        new_call = dict(call)
+        if reprice_item:
+            recorded_cost = _as_float(call.get("cost_cny"))
+            current_cost = _as_float(reprice_item.get("current_estimated_cost_cny"))
+            new_call["recorded_cost_cny"] = recorded_cost
+            new_call["current_estimated_cost_cny"] = current_cost
+            new_call["cost_cny"] = current_cost
+            new_call["cost_delta_cny"] = reprice_item.get("cost_delta_cny")
+            new_call["reprice_status"] = reprice_item.get("reprice_status")
+            new_call["price_source"] = reprice_item.get("price_source")
+            new_call["price_confidence"] = reprice_item.get("price_confidence")
+            if reprice_item.get("reprice_status") == "changed":
+                changed_call_count += 1
+        else:
+            new_call["recorded_cost_cny"] = _as_float(call.get("cost_cny"))
+            new_call["current_estimated_cost_cny"] = None
+            new_call["reprice_status"] = "not_repriced"
+            not_repriced_call_count += 1
+        result.append(new_call)
+
+    return result, {
+        "cost_basis": "current_repriced",
+        "cost_basis_note": "策略报告使用 cost_reprice_report.json 中的 current_estimated_cost_cny；历史 cost_cny 只作为原始证据保留。",
+        "repriced_call_count": len(reprice_items),
+        "changed_call_count": changed_call_count,
+        "not_repriced_call_count": not_repriced_call_count,
+    }
+
+
 def _sum_by_model(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """按供应商和模型汇总成本。"""
 
@@ -207,31 +270,77 @@ def _deepseek_latency(calls: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _latency_by_task_type(calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按任务类型汇总延迟，找出真实瓶颈。"""
+
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for call in calls:
+        grouped[str(call.get("task_type") or "unknown")].append(call)
+
+    total_latency = sum(_as_float(call.get("latency_ms")) for call in calls)
+    rows: list[dict[str, Any]] = []
+    for task_type, task_calls in grouped.items():
+        latencies = [_as_float(call.get("latency_ms")) for call in task_calls]
+        slowest = max(task_calls, key=lambda call: _as_float(call.get("latency_ms")))
+        task_total = sum(latencies)
+        rows.append(
+            {
+                "task_type": task_type,
+                "call_count": len(task_calls),
+                "total_latency_ms": round(task_total, 6),
+                "avg_latency_ms": round(task_total / len(task_calls), 6) if task_calls else 0.0,
+                "max_latency_ms": max(latencies) if latencies else 0.0,
+                "p95_latency_ms": _p95(latencies),
+                "latency_share": round(task_total / total_latency, 6) if total_latency else 0.0,
+                "slowest_provider": slowest.get("provider"),
+                "slowest_model_name": slowest.get("model_name"),
+            }
+        )
+    return sorted(rows, key=lambda item: item["total_latency_ms"], reverse=True)
+
+
+def _current_bottleneck(latency_by_task_type: list[dict[str, Any]]) -> str:
+    """生成当前批次的延迟瓶颈说明。"""
+
+    if not latency_by_task_type:
+        return MISSING_VALUE_TEXT
+    top = latency_by_task_type[0]
+    return (
+        f"当前延迟瓶颈是 {top['task_type']}，累计延迟 {round(top['total_latency_ms'])} ms，"
+        f"占全部模型调用延迟 {_format_percent(top['latency_share'])}；"
+        f"该任务最慢调用来自 {top.get('slowest_provider')}/{top.get('slowest_model_name')}。"
+    )
+
+
 def generate_strategy_report(
     batch_report: dict[str, Any],
     model_calls: list[dict[str, Any]],
     *,
+    reprice_report: dict[str, Any] | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     """根据批次报告和模型调用明细生成策略建议。"""
 
     missing_notes: list[str] = []
+    strategy_calls, cost_basis_info = _apply_cost_basis(model_calls, reprice_report)
     total_files = _get_nested(batch_report, ["file_stats", "total_files"], missing_notes)
     success_rate = _get_nested(batch_report, ["file_stats", "success_rate"], missing_notes)
-    total_cost_cny = _get_nested(batch_report, ["cost_stats", "total_cost_cny"], missing_notes)
+    recorded_total_cost_cny = _get_nested(batch_report, ["cost_stats", "total_cost_cny"], missing_notes)
     avg_latency_ms = _get_nested(batch_report, ["latency_stats", "avg_processing_time_per_file_ms"], missing_notes)
     p95_latency_ms = _get_nested(batch_report, ["latency_stats", "p95_model_latency_ms"], missing_notes)
 
-    total_cost = _as_float(total_cost_cny)
-    cost_by_task_type = _sum_by(model_calls, "task_type")
-    cost_by_provider = _sum_by(model_calls, "provider")
-    cost_by_model = _sum_by_model(model_calls)
-    mock_boundary = _call_boundary(model_calls, is_mock=True)
-    real_boundary = _call_boundary(model_calls, is_mock=False)
+    total_cost = round(sum(_as_float(call.get("cost_cny")) for call in strategy_calls), 6)
+    total_cost_cny = total_cost if cost_basis_info["cost_basis"] == "current_repriced" else recorded_total_cost_cny
+    cost_by_task_type = _sum_by(strategy_calls, "task_type")
+    cost_by_provider = _sum_by(strategy_calls, "provider")
+    cost_by_model = _sum_by_model(strategy_calls)
+    mock_boundary = _call_boundary(strategy_calls, is_mock=True)
+    real_boundary = _call_boundary(strategy_calls, is_mock=False)
     deepseek_cost = _as_float(cost_by_provider.get("deepseek"))
     mock_cost = _as_float(mock_boundary["cost_cny"])
-    slowest_calls = _slowest_calls(model_calls)
-    deepseek_latency = _deepseek_latency(model_calls)
+    slowest_calls = _slowest_calls(strategy_calls)
+    deepseek_latency = _deepseek_latency(strategy_calls)
+    latency_by_task_type = _latency_by_task_type(strategy_calls)
     p95_value = _as_float(p95_latency_ms)
     slowest_call = slowest_calls[0] if slowest_calls else None
 
@@ -252,12 +361,18 @@ def generate_strategy_report(
         "source_files": {
             "batch_report": "batch_report.json",
             "model_calls": "model_calls.jsonl",
+            "cost_reprice_report": "cost_reprice_report.json" if reprice_report else None,
         },
         "field_notes": {
             "batch_id": "批次唯一标识，用来定位本报告分析的是哪一次批处理。",
             "model_call_count": "模型调用次数，用来衡量本批次实际触发了多少次模型任务。",
             "cost_cny": "成本金额，单位人民币，用于成本核算和预算判断。",
+            "cost_basis": "策略报告使用的成本口径，用于区分历史记录成本和当前价格目录重算成本。",
+            "recorded_cost_cny": "历史模型调用记录中原本保存的成本估算值。",
+            "current_estimated_cost_cny": "按当前价格目录和历史调用用量重新计算出的成本估算值。",
+            "reprice_status": "成本重算状态，用于区分成本未变化、已变化或无法重算。",
             "latency_ms": "延迟时间，单位毫秒，用于分析模型调用或文件处理耗时。",
+            "latency_share": "某类任务累计延迟占全部模型调用延迟的比例，用于判断主要瓶颈。",
             "is_mock": "是否为 mock 调用，用于区分真实模型调用和占位调用。",
             "cost_share": "成本占比，用于判断某个任务、供应商或模型是否构成主要成本来源。",
         },
@@ -265,11 +380,13 @@ def generate_strategy_report(
             "total_files": total_files,
             "success_rate": success_rate,
             "total_cost_cny": total_cost_cny,
+            "recorded_total_cost_cny": recorded_total_cost_cny,
             "avg_processing_time_ms": avg_latency_ms,
             "p95_model_latency_ms": p95_latency_ms,
-            "model_call_count": len(model_calls),
+            "model_call_count": len(strategy_calls),
         },
         "cost_analysis": {
+            **cost_basis_info,
             "cost_by_task_type": cost_by_task_type,
             "cost_by_provider": cost_by_provider,
             "top_cost_tasks": _add_share(
@@ -287,8 +404,9 @@ def generate_strategy_report(
         "latency_analysis": {
             "slowest_calls": slowest_calls,
             "deepseek_latency": deepseek_latency,
+            "latency_by_task_type": latency_by_task_type,
             "p95_driver": p95_driver,
-            "current_bottleneck": "当前延迟瓶颈是 DeepSeek 文本分析；mock 上游调用延迟为 0，不能代表真实 OCR、视觉理解或语音识别延迟。",
+            "current_bottleneck": _current_bottleneck(latency_by_task_type),
         },
         "quality_boundary": {
             "real_model_calls": real_boundary,
@@ -372,7 +490,7 @@ def render_strategy_markdown(report: dict[str, Any]) -> str:
         "",
         f"批次编号：{_as_text(report.get('batch_id'))}",
         "",
-        "说明：本报告只基于已有 `batch_report.json` 和 `model_calls.jsonl` 生成，不重新运行批处理，也不触发任何外部模型 API。",
+        "说明：本报告只基于已有 `batch_report.json`、`model_calls.jsonl` 和可选成本重算报告生成，不重新运行批处理，也不触发任何外部模型 API。",
         "",
         "## 1. 批次概览",
         "",
@@ -381,12 +499,16 @@ def render_strategy_markdown(report: dict[str, Any]) -> str:
         f"| 文件数 | {_as_text(overview.get('total_files'))} | 本批次处理的输入文件数量 |",
         f"| 成功率 | {_format_rate(overview.get('success_rate'))} | 文件级结果成功生成比例 |",
         f"| 总成本 | {_format_cny(overview.get('total_cost_cny'))} | 本批次记录到的模型调用成本合计 |",
+        f"| 历史记录成本 | {_format_cny(overview.get('recorded_total_cost_cny'))} | 原始 batch_report.json 中保存的成本合计 |",
         f"| 平均文件处理耗时 | {_format_ms(overview.get('avg_processing_time_ms'))} | 文件级处理耗时平均值 |",
         f"| P95 模型调用延迟 | {_format_ms(overview.get('p95_model_latency_ms'))} | 单次模型调用的 95 分位延迟 |",
         f"| 模型调用次数 | {overview.get('model_call_count')} | 本批次实际记录的模型调用条数 |",
         "",
         "## 2. 成本分析",
         "",
+        f"- 成本口径：{cost.get('cost_basis')}。",
+        f"- 成本口径说明：{cost.get('cost_basis_note')}",
+        f"- 已重算调用数：{cost.get('repriced_call_count')}；成本变化调用数：{cost.get('changed_call_count')}；未重算调用数：{cost.get('not_repriced_call_count')}。",
         f"- DeepSeek 成本：{_format_cny(cost.get('deepseek_cost_cny'))}，占总成本 {_format_percent(cost.get('deepseek_cost_share'))}。",
         f"- Mock 调用成本：{_format_cny(cost.get('mock_cost_cny'))}，占总成本 {_format_percent(cost.get('mock_cost_share'))}。",
         f"- Mock 调用是否计入成本：{'是' if cost.get('mock_cost_counted') else '否'}。",
@@ -423,6 +545,23 @@ def render_strategy_markdown(report: dict[str, Any]) -> str:
             f"- DeepSeek P95 延迟：{_format_ms(latency['deepseek_latency'].get('p95_latency_ms'))}。",
             f"- P95 来源判断：{latency.get('p95_driver')}",
             f"- 当前瓶颈：{latency.get('current_bottleneck')}",
+            "",
+            "按任务类型的延迟：",
+            "",
+            "| task_type | 调用数 | 累计延迟 | 平均延迟 | P95 延迟 | 延迟占比 | 最慢 provider/model |",
+            "|---|---:|---:|---:|---:|---:|---|",
+        ]
+    )
+    for item in latency["latency_by_task_type"]:
+        provider_model = f"{item.get('slowest_provider')}/{item.get('slowest_model_name')}"
+        lines.append(
+            f"| {item.get('task_type')} | {item.get('call_count')} | {_format_ms(item.get('total_latency_ms'))} | "
+            f"{_format_ms(item.get('avg_latency_ms'))} | {_format_ms(item.get('p95_latency_ms'))} | "
+            f"{_format_percent(item.get('latency_share'))} | {provider_model} |"
+        )
+
+    lines.extend(
+        [
             "",
             "最慢调用：",
             "",
@@ -564,14 +703,17 @@ def _join_list(value: Any) -> str:
 def build_strategy_report_from_files(
     batch_dir: str | Path,
     *,
+    reprice_report_path: str | Path | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
     """从批次目录读取文件并生成策略报告。"""
 
     path = Path(batch_dir)
+    reprice_report = read_json(reprice_report_path) if reprice_report_path else None
     return generate_strategy_report(
         read_json(path / "batch_report.json"),
         read_json_objects(path / "model_calls.jsonl"),
+        reprice_report=reprice_report,
         generated_at=generated_at,
     )
 
@@ -592,12 +734,13 @@ def main(argv: list[str] | None = None) -> int:
     """命令行入口：为指定批次目录生成策略报告。"""
 
     args = argv if argv is not None else sys.argv[1:]
-    if len(args) != 1:
-        print("用法: python .\\src\\model_strategy_advisor.py output\\batch_xxx")
+    if len(args) not in {1, 2}:
+        print("用法: python .\\src\\model_strategy_advisor.py output\\batch_xxx [cost_reprice_report.json]")
         return 2
 
     batch_dir = Path(args[0])
-    report = build_strategy_report_from_files(batch_dir)
+    reprice_report_path = Path(args[1]) if len(args) == 2 else None
+    report = build_strategy_report_from_files(batch_dir, reprice_report_path=reprice_report_path)
     output_paths = write_strategy_reports(batch_dir, report)
     print(json.dumps(output_paths, ensure_ascii=False, indent=2))
     return 0
