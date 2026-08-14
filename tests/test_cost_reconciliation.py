@@ -59,6 +59,15 @@ def _model_calls() -> list[dict]:
             "started_at": "2026-07-30T15:26:00+08:00",
         },
         {
+            "call_id": "call_dashscope_001",
+            "provider": "dashscope",
+            "model_name": "paraformer-v2",
+            "response_model_name": "paraformer-v2",
+            "task_type": "speech_to_text",
+            "cost_cny": 0.004,
+            "started_at": "2026-07-30T15:27:00+08:00",
+        },
+        {
             "call_id": "call_mock_001",
             "provider": "doubao",
             "model_name": "mock-ocr",
@@ -84,6 +93,7 @@ class CostReconciliationTest(unittest.TestCase):
 
         self.assertTrue(by_model["qwen-vl-plus"]["requires_bill_reconciliation"])
         self.assertTrue(by_model["deepseek-v4-flash"]["requires_bill_reconciliation"])
+        self.assertTrue(by_model["paraformer-v2"]["requires_bill_reconciliation"])
         self.assertFalse(by_model["mock-ocr"]["requires_bill_reconciliation"])
         self.assertFalse(by_model["PP-OCRv5_mobile"]["requires_bill_reconciliation"])
         self.assertEqual(by_model["deepseek-v4-flash"]["estimated_call_count"], 2)
@@ -93,9 +103,10 @@ class CostReconciliationTest(unittest.TestCase):
         rows = build_billing_template(_model_calls())
         model_names = {row["model_name"] for row in rows}
 
-        self.assertEqual(model_names, {"qwen-vl-plus", "deepseek-v4-flash"})
+        self.assertEqual(model_names, {"qwen-vl-plus", "deepseek-v4-flash", "paraformer-v2"})
         self.assertNotIn("mock-ocr", model_names)
         self.assertEqual(rows[0]["billed_cost_cny"], "")
+        self.assertEqual({row["billing_granularity"] for row in rows}, {"hour"})
 
     def test_reconcile_call_level_bill(self) -> None:
         report = reconcile_costs(
@@ -155,8 +166,9 @@ class CostReconciliationTest(unittest.TestCase):
         self.assertEqual(by_model["deepseek-v4-flash"]["cost_confidence"], "period_level_reconciled")
         self.assertEqual(by_model["deepseek-v4-flash"]["estimated_call_count"], 2)
         self.assertEqual(by_model["qwen-vl-plus"]["cost_confidence"], "unverified")
+        self.assertEqual(by_model["paraformer-v2"]["cost_confidence"], "unverified")
         self.assertEqual(report["summary"]["reconciled_group_count"], 1)
-        self.assertEqual(report["summary"]["unverified_group_count"], 1)
+        self.assertEqual(report["summary"]["unverified_group_count"], 2)
         self.assertFalse(report["summary"]["bill_reconciled"])
 
     def test_blank_billed_cost_keeps_group_unverified(self) -> None:
@@ -316,7 +328,7 @@ class CostReconciliationTest(unittest.TestCase):
         self.assertEqual(saved_report["report_type"], "cost_reconciliation")
         self.assertIn("# 成本对账报告", markdown)
         self.assertIn("字段说明", markdown)
-        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows), 3)
 
     def test_build_from_batch_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -338,7 +350,7 @@ class CostReconciliationTest(unittest.TestCase):
             )
 
         self.assertEqual(report["batch_id"], "batch_from_files")
-        self.assertEqual(report["summary"]["billable_group_count"], 2)
+        self.assertEqual(report["summary"]["billable_group_count"], 3)
         self.assertEqual(report["summary"]["estimation_error_status"], "unknown_until_bill_reconciliation")
 
     def test_markdown_marks_unknown_error_before_bill_reconciliation(self) -> None:

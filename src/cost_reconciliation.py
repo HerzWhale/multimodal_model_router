@@ -102,7 +102,7 @@ def _runtime_type_for_call(model_call: dict[str, Any]) -> str:
         return "mock"
     if provider == "paddlepaddle":
         return "local_model"
-    if provider in {"deepseek", "qwen", "doubao", "tongyi"}:
+    if provider in {"deepseek", "qwen", "dashscope", "doubao", "tongyi"}:
         return "live_api"
     return "unknown"
 
@@ -251,10 +251,10 @@ def build_billing_template(model_calls: list[dict[str, Any]]) -> list[dict[str, 
                 "estimated_call_count": group["estimated_call_count"],
                 "estimated_cost_cny": f"{group['estimated_cost_cny']:.6f}",
                 "billed_cost_cny": "",
-                "billing_granularity": "period",
+                "billing_granularity": "hour",
                 "bill_source": "manual_entry",
                 "matching_method": "provider_model_time_window",
-                "note": "请从供应商后台填入该模型在对应时间窗口内的实际扣费；没有账单前保持为空。",
+                "note": "请从供应商后台按小时或最细可用时间窗口填入实际扣费；如被免费额度抵扣，也填后台实际扣费并在本列说明。",
             }
         )
     return template_rows
@@ -520,7 +520,7 @@ def reconcile_costs(
             "bill_source": "真实扣费来源，例如供应商控制台人工查看或供应商账单导出文件。",
             "matching_method": "系统调用记录与账单记录的匹配方式，例如按供应商、模型和时间窗口匹配。",
             "bill_reconciled": "是否已经填入供应商账单金额并完成对账。",
-            "cost_confidence": "成本可信度状态，用于区分未验证、单次调用级对账和时间段级对账。",
+            "cost_confidence": "成本可信度状态，用于区分未验证、单次调用级对账和小时/日期等时间窗口级对账。",
             "matched_call_ids": "实际参与本条账单核对的模型调用编号列表，用于从对账结果反查调用明细。",
             "unmatched_billing_records": "没有匹配到本批次模型调用的账单记录，用于提示账单时间窗口或模型名称可能填错。",
         },

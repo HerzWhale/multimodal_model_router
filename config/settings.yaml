@@ -8,7 +8,7 @@ text_analysis_backend: mock
 deepseek_api_key_env: DEEPSEEK_API_KEY
 deepseek_base_url: https://api.deepseek.com
 deepseek_model_name: deepseek-v4-flash
-deepseek_max_tokens: 1500
+deepseek_max_tokens: 2500
 qwen_vl_api_key_env: DASHSCOPE_API_KEY
 qwen_vl_base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
 qwen_vl_model_name: qwen-vl-plus

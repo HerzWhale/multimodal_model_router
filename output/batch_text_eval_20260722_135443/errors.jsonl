@@ -1,8 +1,0 @@
-{
-  "batch_id": "batch_text_eval_20260722_135443",
-  "file_id": "file_0014",
-  "call_id": "file_0014_call_0001",
-  "error_level": "model_call",
-  "task_type": "text_analysis",
-  "error_message": "Expecting value: line 1 column 1 (char 0)"
-}

@@ -628,6 +628,8 @@ def apply_backend_overrides(
     routing_rules: dict[str, dict[str, str]],
     *,
     ocr_backend: str | None = None,
+    vision_understanding_backend: str | None = None,
+    speech_to_text_backend: str | None = None,
     text_analysis_backend: str | None = None,
 ) -> dict[str, dict[str, str]]:
     """按主流程的显式后端选择生成预检查用路由，不修改原始配置。"""
@@ -642,6 +644,26 @@ def apply_backend_overrides(
                 {"provider": "paddlepaddle", "model_name": "PP-OCRv5_mobile"}
                 if ocr_backend == "paddleocr"
                 else {"provider": "doubao", "model_name": "mock-ocr"}
+            )
+
+    if vision_understanding_backend is not None:
+        if vision_understanding_backend not in {"mock", "qwen_vl"}:
+            raise ValueError(f"不支持的视觉理解后端: {vision_understanding_backend}")
+        if "visual_understanding" in updated_rules:
+            updated_rules["visual_understanding"] = (
+                {"provider": "qwen", "model_name": "qwen-vl-plus"}
+                if vision_understanding_backend == "qwen_vl"
+                else {"provider": "qwen", "model_name": "mock-vision"}
+            )
+
+    if speech_to_text_backend is not None:
+        if speech_to_text_backend not in {"mock", "dashscope_asr"}:
+            raise ValueError(f"不支持的语音识别后端: {speech_to_text_backend}")
+        if "speech_to_text" in updated_rules:
+            updated_rules["speech_to_text"] = (
+                {"provider": "dashscope", "model_name": "paraformer-v2"}
+                if speech_to_text_backend == "dashscope_asr"
+                else {"provider": "doubao", "model_name": "mock-asr"}
             )
 
     if text_analysis_backend is not None:
@@ -859,6 +881,8 @@ def build_preflight_from_files(
     estimated_evidence_tokens_per_video: int = 800,
     policy_overrides: dict[str, Any] | None = None,
     ocr_backend: str | None = None,
+    vision_understanding_backend: str | None = None,
+    speech_to_text_backend: str | None = None,
     text_analysis_backend: str | None = None,
     max_price_age_days: int = DEFAULT_MAX_PRICE_AGE_DAYS,
     generated_at: str | None = None,
@@ -872,6 +896,8 @@ def build_preflight_from_files(
     routing_rules = apply_backend_overrides(
         routing_rules,
         ocr_backend=ocr_backend,
+        vision_understanding_backend=vision_understanding_backend,
+        speech_to_text_backend=speech_to_text_backend,
         text_analysis_backend=text_analysis_backend,
     )
 
@@ -2279,6 +2305,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--p95-latency-limit-ms", type=float, help="本轮预检查使用的 P95 延迟上限，单位毫秒。")
     parser.add_argument("--min-real-coverage-rate", type=float, help="本轮预检查使用的最低真实模型覆盖率。")
     parser.add_argument("--ocr-backend", choices=["mock", "paddleocr"], help="按主流程规则模拟 OCR 后端选择。")
+    parser.add_argument("--vision-backend", choices=["mock", "qwen_vl"], help="按主流程规则模拟视觉理解后端选择。")
+    parser.add_argument("--speech-backend", choices=["mock", "dashscope_asr"], help="按主流程规则模拟语音识别后端选择。")
     parser.add_argument("--text-analysis-backend", choices=["mock", "deepseek"], help="按主流程规则模拟文本分析后端选择。")
     return parser.parse_args(argv)
 
@@ -2305,6 +2333,8 @@ def main(argv: list[str] | None = None) -> int:
         estimated_evidence_tokens_per_video=args.estimated_evidence_tokens_per_video,
         policy_overrides=_build_policy_overrides_from_args(args),
         ocr_backend=args.ocr_backend,
+        vision_understanding_backend=args.vision_backend,
+        speech_to_text_backend=args.speech_backend,
         text_analysis_backend=args.text_analysis_backend,
         max_price_age_days=args.max_price_age_days,
     )

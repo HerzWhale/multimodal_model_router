@@ -16,6 +16,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from preprocessor import (
+    _assess_video_evidence_stability,
     _find_ffmpeg_executable,
     _sample_keyframe_indices,
     preprocess_file,
@@ -64,6 +65,21 @@ class PreprocessorTest(unittest.TestCase):
         self.assertEqual(_sample_keyframe_indices(50), [0, 2, 49])
         self.assertEqual(_sample_keyframe_indices(50, max_keyframes=5), [0, 2, 16, 33, 49])
         self.assertEqual(_sample_keyframe_indices(3), [0, 1, 2])
+
+    def test_assess_video_evidence_stability_requires_enough_keyframes_and_early_frame(self) -> None:
+        stable = _assess_video_evidence_stability(
+            [
+                {"timestamp_ms": 0},
+                {"timestamp_ms": 1200},
+                {"timestamp_ms": 5000},
+            ]
+        )
+        weak = _assess_video_evidence_stability([{"timestamp_ms": 5000}])
+
+        self.assertEqual(stable["video_evidence_stability"], "stable")
+        self.assertEqual(stable["video_evidence_risk_reasons"], [])
+        self.assertEqual(weak["video_evidence_stability"], "weak")
+        self.assertTrue(weak["video_evidence_risk_reasons"])
 
     def test_preprocess_video_extracts_multiple_keyframes_when_opencv_is_available(self) -> None:
         class FakeCapture:
@@ -125,6 +141,7 @@ class PreprocessorTest(unittest.TestCase):
         self.assertEqual(result["preprocessing_artifacts"]["keyframe_extraction_status"], "extracted")
         self.assertEqual(result["preprocessing_artifacts"]["keyframe_sampling_strategy"], "start_early_then_spaced")
         self.assertEqual(result["preprocessing_artifacts"]["max_keyframes"], 3)
+        self.assertEqual(result["preprocessing_artifacts"]["video_evidence_stability"], "stable")
         self.assertEqual(result["preprocessing_artifacts"]["audio_extraction_status"], "dependency_missing")
         self.assertEqual(
             [item["source_frame_index"] for item in result["preprocessing_artifacts"]["keyframe_metadata"]],

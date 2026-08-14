@@ -19,6 +19,7 @@ from model_router import load_routing_rules
 from pipeline_runner import run_file_pipeline
 from preprocessor import DEFAULT_MAX_KEYFRAMES
 from report_generator import generate_batch_report
+from routing_preflight import build_preflight_from_files, write_preflight_reports
 from runtime_config import runtime_policy_list
 from result_writer import (
     ensure_batch_output_dir,
@@ -198,6 +199,60 @@ def _default_request_purpose(backend_runtime_summary: dict[str, Any]) -> str:
     if not labels:
         labels.append("未产生模型调用")
     return f"受控{' + '.join(labels)}批处理验证"
+
+
+def run_preflight(
+    *,
+    settings_path: str | Path = PROJECT_ROOT / "config" / "settings.yaml",
+    routing_rules_path: str | Path | None = None,
+    model_prices_path: str | Path | None = None,
+    policy_config_path: str | Path | None = None,
+    policy_name: str = "balanced",
+    input_dir_override: str | Path | None = None,
+    include_file_names: list[str] | None = None,
+    ocr_backend_override: str | None = None,
+    vision_understanding_backend_override: str | None = None,
+    speech_to_text_backend_override: str | None = None,
+    text_analysis_backend_override: str | None = None,
+    batch_id: str | None = None,
+    historical_model_calls_paths: list[str | Path] | None = None,
+    max_keyframes: int | None = None,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    """运行批处理前的路由预检查，不触发模型 API。"""
+
+    settings_file = Path(settings_path)
+    project_root = settings_file.resolve().parents[1]
+    settings = load_settings(settings_file)
+    input_dir = _resolve_path(project_root, input_dir_override or settings["input_dir"])
+    output_dir = _resolve_path(project_root, settings["output_dir"])
+    current_batch_id = batch_id or f"preflight_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    default_policy_config = policy_config_path or project_root / "config" / "routing_policy_config.yaml"
+    if not Path(default_policy_config).exists():
+        default_policy_config = PROJECT_ROOT / "config" / "routing_policy_config.yaml"
+    report = build_preflight_from_files(
+        routing_rules_path=routing_rules_path or project_root / "config" / "routing_rules.yaml",
+        model_prices_path=model_prices_path or project_root / "config" / "model_prices.yaml",
+        policy_config_path=default_policy_config,
+        policy_name=policy_name,
+        input_dir=input_dir,
+        include_files=include_file_names,
+        expected_frames_per_video=max_keyframes or DEFAULT_MAX_KEYFRAMES,
+        historical_model_calls_paths=historical_model_calls_paths,
+        ocr_backend=ocr_backend_override or settings.get("ocr_backend"),
+        vision_understanding_backend=vision_understanding_backend_override
+        or settings.get("vision_understanding_backend"),
+        speech_to_text_backend=speech_to_text_backend_override or settings.get("speech_to_text_backend"),
+        text_analysis_backend=text_analysis_backend_override or settings.get("text_analysis_backend"),
+        generated_at=generated_at,
+    )
+    paths = write_preflight_reports(output_dir / current_batch_id, report)
+    return {
+        "batch_id": current_batch_id,
+        "preflight_status": report["preflight_status"],
+        "recommended_action": report["recommended_action"],
+        "report_paths": paths,
+    }
 
 
 def run_batch(
@@ -405,6 +460,15 @@ def _parse_include_files_arg(value: str) -> list[str]:
     return file_names
 
 
+def _parse_path_list_arg(value: str) -> list[str]:
+    """解析逗号分隔的路径列表。"""
+
+    paths = [path.strip() for path in value.split(",") if path.strip()]
+    if not paths:
+        raise argparse.ArgumentTypeError("路径列表不能为空。")
+    return paths
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """解析命令行参数。"""
 
@@ -473,6 +537,21 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=3,
         help="每个视频最多抽取多少张关键帧；默认 3，用于降低 OCR 和 Qwen-VL 调用次数。",
     )
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="只生成运行前路由预检查报告，不执行批处理，不触发任何模型 API。",
+    )
+    parser.add_argument(
+        "--preflight-policy",
+        default="balanced",
+        help="运行前路由预检查使用的策略名称，默认 balanced。",
+    )
+    parser.add_argument(
+        "--historical-model-calls",
+        type=_parse_path_list_arg,
+        help="用于预检查延迟画像的历史 model_calls.jsonl 路径，多个路径用英文逗号分隔。",
+    )
     return parser.parse_args(argv)
 
 
@@ -493,6 +572,23 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
+        if args.preflight_only:
+            summary = run_preflight(
+                settings_path=args.settings,
+                input_dir_override=args.input_dir,
+                ocr_backend_override=args.ocr_backend,
+                vision_understanding_backend_override=args.vision_backend,
+                speech_to_text_backend_override=args.speech_backend,
+                text_analysis_backend_override=args.text_analysis_backend,
+                batch_id=args.batch_id,
+                policy_name=args.preflight_policy,
+                include_file_names=args.include_files,
+                historical_model_calls_paths=args.historical_model_calls,
+                max_keyframes=args.max_keyframes,
+            )
+            print(summary)
+            return 0
+
         summary = run_batch(
             settings_path=args.settings,
             input_dir_override=args.input_dir,

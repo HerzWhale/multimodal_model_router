@@ -47,7 +47,18 @@ GOLD_FIELDS = [
     "reviewer_note",
 ]
 
-VIDEO_TEMPLATE_FIELDS = TEMPLATE_FIELDS[:-1] + ["gold_secondary_topics", "reviewer_note"]
+VIDEO_EVIDENCE_FIELDS = [
+    "processing_status",
+    "quality_flags",
+    "video_evidence_stability",
+    "video_evidence_risk_reasons",
+]
+
+VIDEO_TEMPLATE_FIELDS = TEMPLATE_FIELDS[:-2] + VIDEO_EVIDENCE_FIELDS + [
+    "gold_topic",
+    "gold_secondary_topics",
+    "reviewer_note",
+]
 
 
 def read_json_objects(file_path: str | Path) -> list[dict[str, Any]]:
@@ -104,6 +115,15 @@ def extract_topic_rows(
             "reviewer_note": "",
         }
         if media_type == "video":
+            preprocessing_artifacts = record.get("preprocessing_artifacts")
+            if not isinstance(preprocessing_artifacts, dict):
+                preprocessing_artifacts = {}
+            row["processing_status"] = _optional_text(record.get("processing_status"))
+            row["quality_flags"] = _format_list(record.get("quality_flags"))
+            row["video_evidence_stability"] = _optional_text(preprocessing_artifacts.get("video_evidence_stability"))
+            row["video_evidence_risk_reasons"] = _format_list(
+                preprocessing_artifacts.get("video_evidence_risk_reasons")
+            )
             row["gold_secondary_topics"] = ""
         rows.append(row)
     return rows
@@ -183,6 +203,11 @@ def evaluate_topic_metrics(annotation_rows: list[dict[str, str]]) -> dict[str, A
     invalid_prediction_file_ids: list[str] = []
     valid_prediction_count = 0
     has_secondary_gold = any("gold_secondary_topics" in row for row in annotation_rows)
+    has_video_evidence = any(
+        field_name in row
+        for row in annotation_rows
+        for field_name in VIDEO_EVIDENCE_FIELDS
+    )
     secondary_evaluated_count = 0
     secondary_correct_count = 0
 
@@ -213,19 +238,21 @@ def evaluate_topic_metrics(annotation_rows: list[dict[str, str]]) -> dict[str, A
             secondary_correct = predicted_secondary_topics == gold_secondary_topics
             if secondary_correct:
                 secondary_correct_count += 1
-        evaluated_details.append(
-            {
-                "file_id": file_id,
-                "file_name": row.get("file_name"),
-                "predicted_topic": predicted_topic,
-                "gold_topic": gold_topic,
-                "is_correct": is_correct,
-                "predicted_secondary_topics": row.get("predicted_secondary_topics", ""),
-                "gold_secondary_topics": row.get("gold_secondary_topics", ""),
-                "secondary_topics_correct": secondary_correct,
-                "reviewer_note": row.get("reviewer_note") or "",
-            }
-        )
+        detail = {
+            "file_id": file_id,
+            "file_name": row.get("file_name"),
+            "predicted_topic": predicted_topic,
+            "gold_topic": gold_topic,
+            "is_correct": is_correct,
+            "predicted_secondary_topics": row.get("predicted_secondary_topics", ""),
+            "gold_secondary_topics": row.get("gold_secondary_topics", ""),
+            "secondary_topics_correct": secondary_correct,
+            "reviewer_note": row.get("reviewer_note") or "",
+        }
+        if has_video_evidence:
+            for field_name in VIDEO_EVIDENCE_FIELDS:
+                detail[field_name] = row.get(field_name, "")
+        evaluated_details.append(detail)
 
     evaluated_count = len(evaluated_details)
     correct_count = sum(1 for item in evaluated_details if item["is_correct"])
@@ -252,6 +279,37 @@ def evaluate_topic_metrics(annotation_rows: list[dict[str, str]]) -> dict[str, A
         }
         for item in raw_per_class_metrics
     ]
+
+    field_notes = {
+        "gold_topic": "人工标注的正确主分类，用于和模型预测的 predicted_topic 对比。",
+        "predicted_topic": "模型输出的主分类，用于衡量文本分类结果是否命中人工标签。",
+        "gold_secondary_topics": "人工标注的正确副分类列表，用于检查模型是否错误添加或漏掉交叉领域。",
+        "predicted_secondary_topics": "模型输出的副分类列表，用于和 gold_secondary_topics 对比。",
+        "secondary_topics_accuracy": "副分类完全匹配率，要求预测副分类集合与人工副分类集合一致。",
+        "reviewer_note": "人工评审备注，用于记录分类正确或错误的判断依据。",
+        "accuracy": "端到端文本主分类准确率，计算方式为 correct_count / evaluated_count；调用失败或无有效预测按未命中计算。",
+        "valid_prediction_accuracy": "仅在有效业务分类预测中的准确率，用于把分类判断能力与调用可用性分开观察。",
+        "prediction_coverage": "有效业务分类预测数占已标注样本数的比例，用于衡量模型调用和结构解析是否稳定。",
+        "macro_f1": "业务标签中本批次实际出现分类的 F1 简单平均；无结果和非法预测会造成对应真实分类漏报，但不会被当作新分类。",
+        "precision": "预测为某分类的样本中，真正属于该分类的比例。",
+        "recall": "人工标注为某分类的样本中，被模型正确识别的比例。",
+        "f1": "单个分类 Precision 与 Recall 的调和平均，用于综合衡量误报和漏报。",
+        "support": "人工标准答案中属于某分类的样本数，用于判断该分类证据量。",
+        "evaluated_labels": "人工标签或模型预测中实际出现的分类，用于说明本次指标覆盖范围。",
+        "evaluated_count": "已经填写 gold_topic 并纳入统计的文本样本数。",
+        "valid_prediction_count": "成功产出九类范围内 predicted_topic 的样本数。",
+        "missing_prediction_count": "没有产出 predicted_topic 的已标注样本数，常用于识别调用或解析失败。",
+        "invalid_prediction_count": "产出了内容但不属于九类允许值的样本数，用于发现输出约束失效。",
+    }
+    if has_video_evidence:
+        field_notes.update(
+            {
+                "processing_status": "文件级处理状态，用于区分该视频是成功、部分成功还是失败。",
+                "quality_flags": "机器可读的质量风险标签，用于定位 OCR、视觉理解、语音识别或证据稳定性问题。",
+                "video_evidence_stability": "视频证据稳定性判断，用于说明关键帧数量和前段证据是否足以支撑分类。",
+                "video_evidence_risk_reasons": "视频证据不稳定的具体原因，用于解释分类错误可能来自抽帧证据不足而不是文本模型判断错误。",
+            }
+        )
 
     return {
         "schema_version": "v3",
@@ -288,27 +346,7 @@ def evaluate_topic_metrics(annotation_rows: list[dict[str, str]]) -> dict[str, A
         "missing_prediction_file_ids": missing_prediction_file_ids,
         "invalid_prediction_file_ids": invalid_prediction_file_ids,
         "details": evaluated_details,
-        "field_notes": {
-            "gold_topic": "人工标注的正确主分类，用于和模型预测的 predicted_topic 对比。",
-            "predicted_topic": "模型输出的主分类，用于衡量文本分类结果是否命中人工标签。",
-            "gold_secondary_topics": "人工标注的正确副分类列表，用于检查模型是否错误添加或漏掉交叉领域。",
-            "predicted_secondary_topics": "模型输出的副分类列表，用于和 gold_secondary_topics 对比。",
-            "secondary_topics_accuracy": "副分类完全匹配率，要求预测副分类集合与人工副分类集合一致。",
-            "reviewer_note": "人工评审备注，用于记录分类正确或错误的判断依据。",
-            "accuracy": "端到端文本主分类准确率，计算方式为 correct_count / evaluated_count；调用失败或无有效预测按未命中计算。",
-            "valid_prediction_accuracy": "仅在有效业务分类预测中的准确率，用于把分类判断能力与调用可用性分开观察。",
-            "prediction_coverage": "有效业务分类预测数占已标注样本数的比例，用于衡量模型调用和结构解析是否稳定。",
-            "macro_f1": "业务标签中本批次实际出现分类的 F1 简单平均；无结果和非法预测会造成对应真实分类漏报，但不会被当作新分类。",
-            "precision": "预测为某分类的样本中，真正属于该分类的比例。",
-            "recall": "人工标注为某分类的样本中，被模型正确识别的比例。",
-            "f1": "单个分类 Precision 与 Recall 的调和平均，用于综合衡量误报和漏报。",
-            "support": "人工标准答案中属于某分类的样本数，用于判断该分类证据量。",
-            "evaluated_labels": "人工标签或模型预测中实际出现的分类，用于说明本次指标覆盖范围。",
-            "evaluated_count": "已经填写 gold_topic 并纳入统计的文本样本数。",
-            "valid_prediction_count": "成功产出九类范围内 predicted_topic 的样本数。",
-            "missing_prediction_count": "没有产出 predicted_topic 的已标注样本数，常用于识别调用或解析失败。",
-            "invalid_prediction_count": "产出了内容但不属于九类允许值的样本数，用于发现输出约束失效。",
-        },
+        "field_notes": field_notes,
     }
 
 
@@ -360,33 +398,42 @@ def _safe_ratio(numerator: float, denominator: float) -> float:
     return numerator / denominator if denominator else 0.0
 
 
-def write_evaluation_report(annotation_path: str | Path, json_output_path: str | Path, markdown_output_path: str | Path) -> dict[str, str]:
+def write_evaluation_report(
+    annotation_path: str | Path,
+    json_output_path: str | Path,
+    markdown_output_path: str | Path,
+    *,
+    media_type: str = "text",
+) -> dict[str, str]:
     """读取人工标注表并写入 JSON 和 Markdown 评估报告。"""
 
     report = evaluate_topic_metrics(read_annotation_rows(annotation_path))
+    report["media_type"] = media_type
     json_path = Path(json_output_path)
     markdown_path = Path(markdown_output_path)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    markdown_path.write_text(render_evaluation_markdown(report), encoding="utf-8")
+    markdown_path.write_text(render_evaluation_markdown(report, media_type=media_type), encoding="utf-8")
     return {
         "json": str(json_path),
         "markdown": str(markdown_path),
     }
 
 
-def render_evaluation_markdown(report: dict[str, Any]) -> str:
+def render_evaluation_markdown(report: dict[str, Any], *, media_type: str | None = None) -> str:
     """把文本主分类评估结果渲染为 Markdown。"""
 
+    report_media_type = media_type or str(report.get("media_type") or "text")
+    media_label = "视频" if report_media_type == "video" else "文本"
     lines = [
-        "# 文本主分类人工评估报告",
+        f"# {media_label}主分类人工评估报告",
         "",
-        "说明：本报告只评估文本文件的 `topic` 主分类，不评估摘要、关键词、副分类、图片或视频结果。",
+        f"说明：本报告只评估{media_label}文件的 `topic` 主分类；副分类只做完全匹配检查，不评估摘要、关键词或模型生成质量。",
         "",
         "| 指标 | 数值 | 含义 |",
         "|---|---:|---|",
-        f"| 模板行数 | {report['total_template_rows']} | 需要人工判断的文本样本数 |",
+        f"| 模板行数 | {report['total_template_rows']} | 需要人工判断的{media_label}样本数 |",
         f"| 已评估样本数 | {report['evaluated_count']} | 已填写 gold_topic 的样本数 |",
         f"| 缺少标签样本数 | {report['missing_label_count']} | 尚未填写 gold_topic 的样本数 |",
         f"| 有效预测数 | {report['valid_prediction_count']} | 成功产出允许分类范围内 predicted_topic 的样本数 |",
@@ -414,24 +461,46 @@ def render_evaluation_markdown(report: dict[str, Any]) -> str:
     else:
         lines.append("| 当前数据未提供 | 0 | 当前数据未提供 | 当前数据未提供 | 当前数据未提供 |")
 
-    lines.extend(
-        [
-        "",
-        "## 明细",
-        "",
-        "| file_id | file_name | predicted_topic | gold_topic | 是否正确 | 备注 |",
-        "|---|---|---|---|---|---|",
-        ]
-    )
+    lines.extend(["", "## 明细", ""])
+    if report_media_type == "video":
+        lines.extend(
+            [
+                "| file_id | file_name | predicted_topic | gold_topic | 证据稳定性 | 质量风险 | 是否正确 | 备注 |",
+                "|---|---|---|---|---|---|---|---|",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "| file_id | file_name | predicted_topic | gold_topic | 是否正确 | 备注 |",
+                "|---|---|---|---|---|---|",
+            ]
+        )
 
     if report["details"]:
         for item in report["details"]:
-            lines.append(
-                f"| {item['file_id']} | {item.get('file_name')} | {item['predicted_topic']} | "
-                f"{item['gold_topic']} | {'是' if item['is_correct'] else '否'} | {item.get('reviewer_note') or ''} |"
-            )
+            if report_media_type == "video":
+                lines.append(
+                    f"| {item['file_id']} | {item.get('file_name')} | {item['predicted_topic']} | "
+                    f"{item['gold_topic']} | {item.get('video_evidence_stability') or MISSING_VALUE_TEXT} | "
+                    f"{item.get('quality_flags') or ''} | {'是' if item['is_correct'] else '否'} | "
+                    f"{item.get('reviewer_note') or ''} |"
+                )
+            else:
+                lines.append(
+                    f"| {item['file_id']} | {item.get('file_name')} | {item['predicted_topic']} | "
+                    f"{item['gold_topic']} | {'是' if item['is_correct'] else '否'} | {item.get('reviewer_note') or ''} |"
+                )
     else:
-        lines.append("| 当前数据未提供 | 当前数据未提供 | 当前数据未提供 | 当前数据未提供 | 当前数据未提供 | 请先填写 gold_topic |")
+        if report_media_type == "video":
+            lines.append(
+                "| 当前数据未提供 | 当前数据未提供 | 当前数据未提供 | 当前数据未提供 | "
+                "当前数据未提供 | 当前数据未提供 | 当前数据未提供 | 请先填写 gold_topic |"
+            )
+        else:
+            lines.append(
+                "| 当前数据未提供 | 当前数据未提供 | 当前数据未提供 | 当前数据未提供 | 当前数据未提供 | 请先填写 gold_topic |"
+            )
 
     if report["missing_label_file_ids"]:
         lines.extend(["", "## 尚未标注的文件", ""])
@@ -522,7 +591,7 @@ def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     if not args:
         print("用法: python .\\src\\text_topic_evaluator.py template results.jsonl template.csv [gold.csv]")
-        print("或: python .\\src\\text_topic_evaluator.py evaluate template.csv report.json report.md")
+        print("或: python .\\src\\text_topic_evaluator.py evaluate template.csv report.json report.md [media_type]")
         return 2
 
     command = args[0]
@@ -537,8 +606,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"template": str(output_path)}, ensure_ascii=False, indent=2))
         return 0
 
-    if command == "evaluate" and len(args) == 4:
-        output_paths = write_evaluation_report(args[1], args[2], args[3])
+    if command == "evaluate" and len(args) in {4, 5}:
+        media_type = args[4] if len(args) == 5 else "text"
+        output_paths = write_evaluation_report(args[1], args[2], args[3], media_type=media_type)
         print(json.dumps(output_paths, ensure_ascii=False, indent=2))
         return 0
 

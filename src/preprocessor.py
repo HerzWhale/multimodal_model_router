@@ -1,7 +1,7 @@
 """在模型调用前准备文本、图片和视频文件。
 
 文本文件会读取为 raw_text。图片会透传给 OCR 和视觉理解。视频 V1 只做本地预处理：
-尽量读取视频元信息、抽取最多 3 张代表关键帧，并在本机具备 ffmpeg 时抽取音频文件。
+尽量读取视频元信息、抽取前段优先的代表关键帧，并在本机具备 ffmpeg 时抽取音频文件。
 """
 
 from __future__ import annotations
@@ -23,6 +23,11 @@ DEFAULT_FFMPEG_TIMEOUT_SECONDS = int(VIDEO_POLICY.get("ffmpeg_timeout_seconds", 
 DEFAULT_PROCESS_ERROR_PREVIEW_CHARS = int(VIDEO_POLICY.get("process_error_preview_chars", 300))
 DEFAULT_EARLY_FRAME_RATIO = float(VIDEO_POLICY.get("early_frame_ratio", 0.05))
 DEFAULT_KEYFRAME_SAMPLING_STRATEGY = str(VIDEO_POLICY.get("keyframe_sampling_strategy", "start_early_then_spaced"))
+DEFAULT_MIN_KEYFRAMES_FOR_STABLE_EVIDENCE = int(VIDEO_POLICY.get("min_keyframes_for_stable_evidence", 3))
+DEFAULT_REQUIRE_EARLY_KEYFRAME_FOR_STABLE_EVIDENCE = bool(
+    VIDEO_POLICY.get("require_early_keyframe_for_stable_evidence", True)
+)
+DEFAULT_EARLY_EVIDENCE_WINDOW_MS = int(VIDEO_POLICY.get("early_evidence_window_ms", 3000))
 
 
 def preprocess_text(source_path: str | Path) -> dict[str, Any]:
@@ -232,6 +237,31 @@ def _timestamp_ms_for_frame(frame_index: int, fps: float | None) -> int | None:
     return int(round(frame_index / fps * 1000))
 
 
+def _assess_video_evidence_stability(
+    keyframe_metadata: list[dict[str, Any]],
+    *,
+    min_keyframes: int = DEFAULT_MIN_KEYFRAMES_FOR_STABLE_EVIDENCE,
+    require_early_keyframe: bool = DEFAULT_REQUIRE_EARLY_KEYFRAME_FOR_STABLE_EVIDENCE,
+    early_window_ms: int = DEFAULT_EARLY_EVIDENCE_WINDOW_MS,
+) -> dict[str, Any]:
+    """判断视频关键帧证据是否足够支撑后续分类。"""
+
+    reasons: list[str] = []
+    if len(keyframe_metadata) < min_keyframes:
+        reasons.append(f"关键帧数量少于 {min_keyframes} 张。")
+    timestamps = [
+        item.get("timestamp_ms")
+        for item in keyframe_metadata
+        if isinstance(item.get("timestamp_ms"), int)
+    ]
+    if require_early_keyframe and not any(timestamp <= early_window_ms for timestamp in timestamps):
+        reasons.append(f"缺少前 {early_window_ms}ms 内的早期关键帧。")
+    return {
+        "video_evidence_stability": "stable" if not reasons else "weak",
+        "video_evidence_risk_reasons": reasons,
+    }
+
+
 def preprocess_video(
     source_path: str | Path,
     artifact_dir: str | Path | None = None,
@@ -240,7 +270,7 @@ def preprocess_video(
 ) -> dict[str, Any]:
     """视频 V1 预处理。
 
-    当前只做最小闭环：如果本地有 OpenCV 且视频可读，就等距抽取最多 3 张关键帧；
+    当前只做最小闭环：如果本地有 OpenCV 且视频可读，就抽取前段优先的代表关键帧；
     如果本地有 ffmpeg 且提供了产物目录，就抽取单声道 wav 音频文件。
     """
 
@@ -334,6 +364,10 @@ def preprocess_video(
         if audio_result.get("warning_message"):
             warnings.append(str(audio_result["warning_message"]))
 
+    evidence_stability = _assess_video_evidence_stability(keyframe_metadata)
+    if evidence_stability["video_evidence_stability"] == "weak":
+        warnings.extend(evidence_stability["video_evidence_risk_reasons"])
+
     video_preprocess = {
         "schema_version": "v1",
         "preprocess_status": preprocess_status,
@@ -356,6 +390,7 @@ def preprocess_video(
         "fps": fps,
         "width": width,
         "height": height,
+        **evidence_stability,
         "warning_messages": warnings,
     }
     return {

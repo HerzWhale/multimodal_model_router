@@ -83,6 +83,20 @@ class RoutingPreflightTest(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def test_backend_overrides_cover_all_runtime_backends(self) -> None:
+        routes = apply_backend_overrides(
+            _routing_rules(),
+            ocr_backend="paddleocr",
+            vision_understanding_backend="qwen_vl",
+            speech_to_text_backend="dashscope_asr",
+            text_analysis_backend="deepseek",
+        )
+
+        self.assertEqual(routes["ocr"]["model_name"], "PP-OCRv5_mobile")
+        self.assertEqual(routes["visual_understanding"]["model_name"], "qwen-vl-plus")
+        self.assertEqual(routes["speech_to_text"]["model_name"], "paraformer-v2")
+        self.assertEqual(routes["text_analysis"]["model_name"], "deepseek-v4-flash")
+
     def test_default_mock_routes_fail_real_coverage_gate(self) -> None:
         report = build_preflight_report(
             routing_rules=_routing_rules(),

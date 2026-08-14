@@ -22,7 +22,7 @@ from model_clients import (
     QwenVLResponseError,
 )
 from model_router import load_routing_rules
-from pipeline_runner import LOW_QUALITY_OCR_FLAG, _is_low_quality_ocr_text, run_file_pipeline
+from pipeline_runner import LOW_QUALITY_OCR_FLAG, VIDEO_EVIDENCE_WEAK_FLAG, _is_low_quality_ocr_text, run_file_pipeline
 
 
 class PipelineRunnerTest(unittest.TestCase):
@@ -62,6 +62,8 @@ class PipelineRunnerTest(unittest.TestCase):
                 "fps": None,
                 "width": None,
                 "height": None,
+                "video_evidence_stability": "weak",
+                "video_evidence_risk_reasons": ["关键帧数量少于 3 张。"],
                 "warning_messages": ["视频V1测试固定返回：未产出关键帧，未提取音频。"],
             },
         }
@@ -83,6 +85,8 @@ class PipelineRunnerTest(unittest.TestCase):
                 "audio_extraction_status": "not_implemented",
                 "duration_ms": 2000,
                 "duration_source": "opencv_frame_count_fps",
+                "video_evidence_stability": "weak",
+                "video_evidence_risk_reasons": ["关键帧数量少于 3 张。"],
                 "warning_messages": ["视频V1尚未实现真实音频提取。"],
             },
         }
@@ -112,6 +116,8 @@ class PipelineRunnerTest(unittest.TestCase):
                 "audio_channels": 1,
                 "duration_ms": 2000,
                 "duration_source": "opencv_frame_count_fps",
+                "video_evidence_stability": "weak",
+                "video_evidence_risk_reasons": ["关键帧数量少于 3 张。"],
                 "warning_messages": [],
             },
         }
@@ -146,6 +152,8 @@ class PipelineRunnerTest(unittest.TestCase):
                 "audio_extraction_status": "not_implemented",
                 "duration_ms": 6000,
                 "duration_source": "opencv_frame_count_fps",
+                "video_evidence_stability": "stable",
+                "video_evidence_risk_reasons": [],
                 "warning_messages": ["视频V1尚未实现真实音频提取。"],
             },
         }
@@ -637,9 +645,10 @@ class PipelineRunnerTest(unittest.TestCase):
                 output = run_file_pipeline(self._file_record(path, "video"), self.routing_rules, self.model_prices)
 
         result = output["result"]
-        self.assertEqual(result["processing_status"], "success")
+        self.assertEqual(result["processing_status"], "partial_success")
         self.assertEqual(result["evidence_used"], ["ocr_text", "visual_description", "audio_transcript"])
         self.assertEqual(result["missing_evidence"], [])
+        self.assertIn(VIDEO_EVIDENCE_WEAK_FLAG, result["quality_flags"])
         self.assertNotIn("video_audio_not_extracted", result["quality_flags"])
         self.assertEqual(result["audio_transcript"], "模拟音频转写：demo_audio.wav")
         self.assertEqual([call["task_type"] for call in output["model_calls"]], ["ocr", "visual_understanding", "speech_to_text", "text_analysis"])
@@ -759,6 +768,7 @@ class PipelineRunnerTest(unittest.TestCase):
         result = output["result"]
         self.assertEqual(result["processing_status"], "partial_success")
         self.assertEqual(result["missing_evidence"], ["audio_transcript"])
+        self.assertIn(VIDEO_EVIDENCE_WEAK_FLAG, result["quality_flags"])
         speech_call = [call for call in output["model_calls"] if call["task_type"] == "speech_to_text"][0]
         self.assertEqual(speech_call["status"], "failed")
         self.assertEqual(speech_call["input_units"], [{"unit_type": "audio_seconds", "quantity": 0}])

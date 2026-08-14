@@ -192,17 +192,15 @@ python .\src\main.py --input-dir .\input\sample_videos --include-files 例子.mp
 
 启用后，每张关键帧仍独立处理。某一帧第一次失败、第二次成功时，两次尝试都会写入 `model_calls.jsonl`：第一次为 `failed`，第二次为 `success`，最终该帧的 `visual_description` 会进入下游证据；如果重试后仍失败，系统会保留其他成功关键帧的画面描述，并写入 `quality_flags=video_visual_keyframe_failed` 和对应 `warning_messages`。这属于失败补偿，不代表完整视频理解已经实现。
 
-批处理前可以先运行路由策略预检查：
+批处理前可以先运行路由策略预检查。现在推荐从主入口执行，避免预检查参数和正式批处理参数分裂：
 
 ```powershell
-python .\src\routing_preflight.py --input-dir .\input --include-files ai_content_sample.txt,img.png,img_1.png --ocr-backend paddleocr --text-analysis-backend deepseek --budget-limit-cny 50 --min-real-coverage-rate 0.4 --expected-audio-seconds-per-video 60 --historical-model-calls ".\output\batch_20260718_150348\model_calls.jsonl,.\output\batch_paddleocr_keyframes_20260724_retry\model_calls.jsonl,.\output\batch_text_eval_20260722_135443\model_calls.jsonl,.\output\batch_controlled_mock_trial_20260802\model_calls.jsonl,.\output\batch_controlled_paddleocr_trial_20260802\model_calls.jsonl,.\output\batch_controlled_deepseek_text_trial_20260802\model_calls.jsonl,.\output\batch_controlled_deepseek_text_retry_diagnostics_20260802\model_calls.jsonl" --output-dir .\output\routing_preflight_current
+python .\src\main.py --preflight-only --input-dir .\input\sample_videos --include-files "例子.mp4,例子1.mp4,例子2.mp4,例子3.mp4" --ocr-backend paddleocr --vision-backend qwen_vl --speech-backend dashscope_asr --text-analysis-backend deepseek --historical-model-calls .\output\batch_video_evidence_gate_check_retry\model_calls.jsonl --batch-id preflight_video_full_real_current
 ```
 
-这条命令只读取本地配置、输入目录和已有历史调用记录，不运行 DeepSeek、不运行 PaddleOCR，也不下载模型权重。它会生成 `routing_preflight_report.json` 和 `routing_preflight_report.md`，用于说明当前路由是否完整、输入规模会触发多少任务单位、哪些任务仍是 mock、预算和 P95 延迟是否能在运行前判断。
+这条命令只读取本地配置、输入目录和已有历史调用记录，不执行正式批处理，不触发 DeepSeek、Qwen-VL、DashScope ASR 或 PaddleOCR，也不产生费用。它会生成 `routing_preflight_report.json` 和 `routing_preflight_report.md`，用于说明当前路线在运行前是否存在路由缺口、mock 边界、预算风险和 P95 延迟风险。
 
-当前 `output/routing_preflight_current/` 的报告基于 3 个受控输入样本生成：1 个文本、2 张图片、0 个视频。由于本轮没有视频，`speech_to_text` 不进入本批次预期任务；由于当前主流程没有触发长文本切分后的跨片段汇总，`summary_merge` 也不进入本批次预期任务。当前预期任务为 OCR、视觉理解和文本分析，预估总成本为 0.022589 元，50 元预算约束通过。当前版本已把延迟闸门拆成任务级目标：OCR 受控本地 CPU 试跑目标为 60000ms，视觉理解当前占位目标为 3500ms，文本分析受控外部 API 目标为 8000ms；读取已有历史批次后，OCR 和文本分析满足各自任务级目标，视觉理解只有 mock 占位延迟证据，因此任务级延迟汇总为 `warning`，不是 `pass`。当前预检查总状态仍为 `warning`，且 `blocking_reasons` 为空；它表示可以继续做受控小样本试跑，但不能把结果解释为完整真实多模态平台、真实视觉模型 P95 达标或生产 SLA。
-
-报告会同时生成 `controlled_trial_plan`：这是受控小样本试跑建议，用来说明在“预算没问题、仍有mock边界或延迟风险”的情况下下一轮应如何缩小范围。当前建议是先使用 `--include-files ai_content_sample.txt,img.png,img_1.png` 做最多3个文件的小批量试跑，暂不纳入视频；任何真实外部API试跑仍必须另行带 `--allow-live-api` 授权。这个建议只写入报告，不会自动执行命令。
+当前 `output/preflight_video_full_real_current/` 的报告基于 4 个视频样本和 `output/batch_video_evidence_gate_check_retry/model_calls.jsonl` 生成。预检查结果为 `fail`：当前路线没有 mock 覆盖问题，但历史延迟中 `visual_understanding`、`speech_to_text` 和 `text_analysis` 的 P95 延迟超过当前目标，因此不建议直接扩大运行。这里的 `fail` 是运行前闸门判断，不是批处理失败。
 
 默认不会自动重试。只有在已明确授权真实API调用的基础上，再显式增加以下参数，才允许对可重试错误最多重试1次：
 

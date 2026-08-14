@@ -357,19 +357,19 @@ output/routing_preflight_current/routing_preflight_report.json
 复现命令：
 
 ```powershell
-python .\src\routing_preflight.py --input-dir .\input --include-files ai_content_sample.txt,img.png,img_1.png --ocr-backend paddleocr --text-analysis-backend deepseek --budget-limit-cny 50 --min-real-coverage-rate 0.4 --expected-audio-seconds-per-video 60 --historical-model-calls ".\output\batch_20260718_150348\model_calls.jsonl,.\output\batch_paddleocr_keyframes_20260724_retry\model_calls.jsonl,.\output\batch_text_eval_20260722_135443\model_calls.jsonl,.\output\batch_controlled_mock_trial_20260802\model_calls.jsonl,.\output\batch_controlled_paddleocr_trial_20260802\model_calls.jsonl,.\output\batch_controlled_deepseek_text_trial_20260802\model_calls.jsonl,.\output\batch_controlled_deepseek_text_retry_diagnostics_20260802\model_calls.jsonl" --output-dir .\output\routing_preflight_current
+python .\src\main.py --preflight-only --input-dir .\input\sample_videos --include-files "例子.mp4,例子1.mp4,例子2.mp4,例子3.mp4" --ocr-backend paddleocr --vision-backend qwen_vl --speech-backend dashscope_asr --text-analysis-backend deepseek --historical-model-calls .\output\batch_video_evidence_gate_check_retry\model_calls.jsonl --batch-id preflight_video_full_real_current
 ```
 
-本次预检查基于 3 个受控输入文件、显式选择的 PaddleOCR 图片OCR后端、DeepSeek 文本分析后端和已有历史调用批次生成。它只读取本地文件清单、配置和历史 `model_calls.jsonl`，不触发 PaddleOCR 推理，不触发 DeepSeek API，也不产生新的费用。
+本次预检查基于 4 个视频文件、显式选择的 PaddleOCR、Qwen-VL、DashScope ASR、DeepSeek 后端和已有历史调用批次生成。它只读取本地文件清单、配置和历史 `model_calls.jsonl`，不触发任何真实模型调用，也不产生新的费用。
 
 当前结果应这样解读：
 
-- `preflight_status` 为 `warning`，表示当前没有硬阻塞，但仍存在不能扩大解释的风险；
-- `workload_profile` 显示本次纳入3个输入样本：1个文本、2张图片、0个视频；
-- `latency_profile` 从已有历史调用记录中提取任务级延迟：OCR P95 为56401ms，文本分析 P95 为7112ms；
+- `preflight_status` 为 `fail`，表示运行前闸门发现硬阻塞，不建议直接扩大运行；
+- `workload_profile` 显示本次纳入4个视频样本；
+- `latency_profile` 从已有历史调用记录中提取任务级延迟：OCR、视觉理解、语音识别和文本分析都有历史证据；
 - `task_latency_targets_ms` 使用任务级P95目标：OCR 为60000ms，视觉理解为3500ms，文本分析为8000ms；这些目标是当前受控试跑闸门，不是线上生产SLA；
-- `task_latency_target_checks` 显示 OCR 56401ms低于60000ms、文本分析7112ms低于8000ms；视觉理解虽然记录为0ms低于3500ms，但该值来自mock占位，因此状态为 `warning`，不能解释成真实视觉模型P95达标；
-- `latency_bottleneck_analysis` 把慢因拆成三类：`ocr` 的56401ms来自本地 PaddleOCR 运行，`text_analysis` 的7112ms来自真实 DeepSeek API 调用，视觉理解的 mock 延迟不能用于判断真实供应商性能；由于当前预期任务不含视频，语音识别不会进入本轮慢因列表；
+- `task_latency_target_checks` 显示 OCR 满足当前本地运行目标，但视觉理解、语音识别和文本分析超过当前 P95 目标；
+- `latency_bottleneck_analysis` 把慢因拆成真实外部 API、本地运行和 mock 占位；当前阻塞主要来自真实外部 API 延迟，不是 mock 伪数据；
 - `current_route` 显示 OCR 和文本分析是非mock路线，视觉理解仍是mock；因为本批次没有视频，语音识别不进入当前预期任务；因为当前主流程没有触发长文本切分后的跨片段汇总，汇总任务也不进入当前预期任务；
 - `real_coverage_rate` 为 66.67%，表示3类当前预期任务中有2类走非mock路线；
 - `expected_units_by_task` 基于运行前假设生成：OCR 2张图、视觉理解2帧、文本分析输入789 token和输出900 token；本批次没有视频，因此不生成语音识别用量；

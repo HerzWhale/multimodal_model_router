@@ -42,10 +42,12 @@ LOW_QUALITY_OCR_FLAG = "low_quality_ocr_text"
 LOW_QUALITY_OCR_WARNING = "OCR 返回了非空文字，但文本疑似乱码或过度碎片化，最终分析未把 OCR 文字作为可靠证据。"
 VIDEO_OCR_KEYFRAME_FAILED_FLAG = "video_ocr_keyframe_failed"
 VIDEO_VISUAL_KEYFRAME_FAILED_FLAG = "video_visual_keyframe_failed"
+VIDEO_EVIDENCE_WEAK_FLAG = "video_evidence_weak"
 STATUS_AFFECTING_QUALITY_FLAGS = {
     LOW_QUALITY_OCR_FLAG,
     VIDEO_OCR_KEYFRAME_FAILED_FLAG,
     VIDEO_VISUAL_KEYFRAME_FAILED_FLAG,
+    VIDEO_EVIDENCE_WEAK_FLAG,
 }
 OCR_QUALITY_GATE = runtime_policy_section("ocr_quality_gate")
 ALLOWED_OCR_BACKENDS = runtime_policy_list("runtime_backends", "ocr")
@@ -677,6 +679,9 @@ def run_file_pipeline(
         for warning in preprocessing_artifacts.get("warning_messages", []):
             if warning not in warning_messages:
                 warning_messages.append(str(warning))
+        if preprocessing_artifacts.get("video_evidence_stability") == "weak":
+            if VIDEO_EVIDENCE_WEAK_FLAG not in quality_flags:
+                quality_flags.append(VIDEO_EVIDENCE_WEAK_FLAG)
 
         ocr_provider = "paddlepaddle" if ocr_backend == "paddleocr" else None
         ocr_model_name = DEFAULT_PADDLEOCR_MODEL_NAME if ocr_backend == "paddleocr" else None

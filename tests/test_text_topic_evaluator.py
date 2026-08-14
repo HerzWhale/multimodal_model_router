@@ -106,6 +106,12 @@ class TextTopicEvaluatorTest(unittest.TestCase):
                     "topic": "humor",
                     "secondary_topics": ["lifestyle"],
                     "summary": "动物餐厅相关搞笑视频。",
+                    "processing_status": "partial_success",
+                    "quality_flags": ["video_evidence_weak"],
+                    "preprocessing_artifacts": {
+                        "video_evidence_stability": "weak",
+                        "video_evidence_risk_reasons": ["关键帧数量不足"],
+                    },
                 }
             ],
             media_type="video",
@@ -124,6 +130,10 @@ class TextTopicEvaluatorTest(unittest.TestCase):
 
         self.assertEqual(merged_rows[0]["predicted_topic"], "humor")
         self.assertEqual(merged_rows[0]["predicted_secondary_topics"], "lifestyle")
+        self.assertEqual(merged_rows[0]["processing_status"], "partial_success")
+        self.assertEqual(merged_rows[0]["quality_flags"], "video_evidence_weak")
+        self.assertEqual(merged_rows[0]["video_evidence_stability"], "weak")
+        self.assertEqual(merged_rows[0]["video_evidence_risk_reasons"], "关键帧数量不足")
         self.assertEqual(merged_rows[0]["gold_topic"], "humor")
         self.assertEqual(merged_rows[0]["gold_secondary_topics"], "lifestyle")
 
@@ -354,6 +364,56 @@ class TextTopicEvaluatorTest(unittest.TestCase):
         self.assertIn("Accuracy", markdown)
         self.assertIn("Macro-F1", markdown)
         self.assertIn("分类级指标", markdown)
+
+    def test_write_video_evaluation_report_uses_video_title(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            annotation_path = Path(tmp_dir) / "template.csv"
+            json_path = Path(tmp_dir) / "report.json"
+            markdown_path = Path(tmp_dir) / "report.md"
+            with annotation_path.open("w", encoding="utf-8-sig", newline="") as file:
+                writer = csv.DictWriter(
+                    file,
+                    fieldnames=[
+                        "file_id",
+                        "file_name",
+                        "predicted_topic",
+                        "predicted_secondary_topics",
+                        "processing_status",
+                        "quality_flags",
+                        "video_evidence_stability",
+                        "video_evidence_risk_reasons",
+                        "gold_topic",
+                        "gold_secondary_topics",
+                        "reviewer_note",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "file_id": "file_001",
+                        "file_name": "例子1.mp4",
+                        "predicted_topic": "humor",
+                        "predicted_secondary_topics": "lifestyle",
+                        "processing_status": "partial_success",
+                        "quality_flags": "video_evidence_weak",
+                        "video_evidence_stability": "weak",
+                        "video_evidence_risk_reasons": "关键帧数量不足",
+                        "gold_topic": "humor",
+                        "gold_secondary_topics": "lifestyle",
+                        "reviewer_note": "正确",
+                    }
+                )
+
+            output_paths = write_evaluation_report(annotation_path, json_path, markdown_path, media_type="video")
+            saved_report = json.loads(Path(output_paths["json"]).read_text(encoding="utf-8"))
+            markdown = Path(output_paths["markdown"]).read_text(encoding="utf-8")
+
+        self.assertEqual(saved_report["media_type"], "video")
+        self.assertIn("# 视频主分类人工评估报告", markdown)
+        self.assertIn("副分类 Accuracy", markdown)
+        self.assertIn("证据稳定性", markdown)
+        self.assertIn("video_evidence_weak", markdown)
+        self.assertEqual(saved_report["details"][0]["video_evidence_stability"], "weak")
 
     def test_render_missing_label_report(self) -> None:
         report = evaluate_topic_metrics(

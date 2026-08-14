@@ -20,6 +20,7 @@ sys.path.insert(0, str(SRC_DIR))
 from main import main as cli_main
 from main import _build_backend_runtime_summary
 from main import run_batch
+from main import run_preflight
 
 
 def _read_json_objects(file_path: Path) -> list[dict]:
@@ -247,6 +248,22 @@ class MainTest(unittest.TestCase):
                     include_file_names=["missing.txt"],
                 )
 
+    def test_run_preflight_writes_report_without_running_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = self._write_settings(Path(tmp_dir), backend="mock")
+
+            summary = run_preflight(
+                settings_path=settings_path,
+                batch_id="preflight_test",
+                include_file_names=["demo.txt"],
+            )
+
+            report_dir = Path(tmp_dir) / "output" / "preflight_test"
+            self.assertIn(summary["preflight_status"], {"pass", "warning", "fail"})
+            self.assertTrue((report_dir / "routing_preflight_report.json").exists())
+            self.assertTrue((report_dir / "routing_preflight_report.md").exists())
+            self.assertFalse((report_dir / "results.jsonl").exists())
+
     def test_repository_default_backend_is_mock(self) -> None:
         settings = (PROJECT_ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
 
@@ -394,6 +411,44 @@ class MainTest(unittest.TestCase):
             self.assertEqual(exit_code, 2)
             self.assertIn("--speech-backend dashscope_asr", stdout.getvalue())
             self.assertFalse((Path(tmp_dir) / "output").exists())
+
+    @patch("main.run_batch")
+    @patch("main.run_preflight")
+    def test_cli_preflight_only_does_not_run_batch(self, mock_run_preflight, mock_run_batch) -> None:
+        mock_run_preflight.return_value = {
+            "batch_id": "preflight_cli",
+            "preflight_status": "warning",
+            "recommended_action": "受控试跑",
+            "report_paths": {},
+        }
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            exit_code = cli_main(
+                [
+                    "--preflight-only",
+                    "--batch-id",
+                    "preflight_cli",
+                    "--ocr-backend",
+                    "paddleocr",
+                    "--vision-backend",
+                    "qwen_vl",
+                    "--speech-backend",
+                    "dashscope_asr",
+                    "--text-analysis-backend",
+                    "deepseek",
+                    "--historical-model-calls",
+                    "output/demo/model_calls.jsonl",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        mock_run_batch.assert_not_called()
+        call_kwargs = mock_run_preflight.call_args.kwargs
+        self.assertEqual(call_kwargs["ocr_backend_override"], "paddleocr")
+        self.assertEqual(call_kwargs["vision_understanding_backend_override"], "qwen_vl")
+        self.assertEqual(call_kwargs["speech_to_text_backend_override"], "dashscope_asr")
+        self.assertEqual(call_kwargs["text_analysis_backend_override"], "deepseek")
+        self.assertEqual(call_kwargs["historical_model_calls_paths"], ["output/demo/model_calls.jsonl"])
 
     @patch("main.run_batch")
     def test_cli_paddleocr_keeps_unselected_text_backend_mock(self, mock_run_batch) -> None:

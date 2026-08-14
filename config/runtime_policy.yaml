@@ -58,6 +58,9 @@ runtime_backends:
 video_preprocessing:
   default_max_keyframes: 3
   early_frame_ratio: 0.05
+  min_keyframes_for_stable_evidence: 3
+  require_early_keyframe_for_stable_evidence: true
+  early_evidence_window_ms: 3000
   audio_sample_rate_hz: 16000
   audio_channels: 1
   ffmpeg_timeout_seconds: 120
