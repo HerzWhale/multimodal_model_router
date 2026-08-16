@@ -69,8 +69,9 @@ class RoutingPolicyTest(unittest.TestCase):
     def test_policy_names_and_definition(self) -> None:
         policy_names = list_policy_names()
 
-        self.assertEqual(policy_names, ["budget_first", "latency_first", "quality_first", "balanced"])
+        self.assertEqual(policy_names, ["budget_first", "latency_first", "quality_first", "balanced", "production_sla"])
         self.assertEqual(get_policy_definition("budget_first")["display_name"], "成本优先")
+        self.assertEqual(get_policy_definition("production_sla")["display_name"], "生产 SLA 候选")
 
     def test_unknown_policy_raises_error(self) -> None:
         with self.assertRaises(ValueError):
@@ -98,6 +99,13 @@ class RoutingPolicyTest(unittest.TestCase):
         self.assertEqual(latency_check["constraint_name"], "p95_latency_limit_ms")
         self.assertEqual(latency_check["status"], "fail")
         self.assertIn("DeepSeek", result["recommendation"]["recommended_combo"][0])
+
+    def test_production_sla_policy_has_strict_defaults(self) -> None:
+        constraints = get_policy_definition("production_sla")["default_constraints"]
+
+        self.assertEqual(constraints["min_real_coverage_rate"], 1.0)
+        self.assertEqual(constraints["task_latency_targets_ms"]["visual_understanding"], 10000)
+        self.assertEqual(constraints["task_latency_targets_ms"]["text_analysis"], 8000)
 
     def test_mock_and_real_model_boundary(self) -> None:
         catalog = build_model_catalog(_model_calls())

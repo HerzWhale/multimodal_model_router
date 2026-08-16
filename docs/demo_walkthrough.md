@@ -99,6 +99,8 @@ python .\src\main.py --input-dir .\input\sample_videos --include-files 例子.mp
 
 该参数只允许对可重试错误最多重试1次。某张关键帧第一次失败、第二次成功时，`model_calls.jsonl` 会同时保留失败尝试和成功尝试；最终 `visual_description` 会使用成功尝试的画面描述。如果某张关键帧重试后仍失败，系统会保留其他成功关键帧的画面描述，并把该文件标记为 `partial_success`，同时写入 `quality_flags=video_visual_keyframe_failed`。这属于失败补偿，不是完整视频理解能力。
 
+Qwen-VL 请求图片默认会按 `qwen_vl_max_image_side=960` 生成压缩后的请求副本，只影响发给 Qwen-VL 的 Base64 图片，不会改写本地原图，也不会影响 PaddleOCR 使用原始图片。该配置用于降低视觉理解延迟风险；是否达标仍以真实小批次的 `latency_ms` 和批次 P95 为准。
+
 字段说明：
 
 | 字段 | 含义与作用 |
@@ -164,6 +166,8 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 | `vision_understanding_backend` | 图片或视频关键帧视觉理解后端配置，用来决定使用 mock 还是 Qwen-VL |
 | `--max-api-retries` | 可重试错误的最大重试次数；默认0，显式设为1才允许一次重试；当前适用于 DeepSeek 和 Qwen-VL |
 | `--allow-live-api` | 真实 API 调用授权开关，用来防止误触发外部调用和费用 |
+| `text_analysis_evidence_char_limit` | 文本分析输入证据字符上限，用于减少长视频证据直接塞入文本分析模型造成的延迟风险；原始证据仍保留在结果文件中 |
+| `qwen_vl_max_image_side` | Qwen-VL 请求图片副本最长边上限，用来减少图片请求体积和视觉理解延迟风险；原图不被修改 |
 
 ## 3. `results_readable.md` 怎么读
 
@@ -364,22 +368,30 @@ python .\src\main.py --preflight-only --input-dir .\input\sample_videos --includ
 
 当前结果应这样解读：
 
-- `preflight_status` 为 `fail`，表示运行前闸门发现硬阻塞，不建议直接扩大运行；
+- `preflight_status` 为 `warning`，表示运行前没有硬阻塞，但仍有预算、价格目录或成本估算边界需要解释；
 - `workload_profile` 显示本次纳入4个视频样本；
 - `latency_profile` 从已有历史调用记录中提取任务级延迟：OCR、视觉理解、语音识别和文本分析都有历史证据；
-- `task_latency_targets_ms` 使用任务级P95目标：OCR 为60000ms，视觉理解为3500ms，文本分析为8000ms；这些目标是当前受控试跑闸门，不是线上生产SLA；
-- `task_latency_target_checks` 显示 OCR 满足当前本地运行目标，但视觉理解、语音识别和文本分析超过当前 P95 目标；
-- `latency_bottleneck_analysis` 把慢因拆成真实外部 API、本地运行和 mock 占位；当前阻塞主要来自真实外部 API 延迟，不是 mock 伪数据；
-- `current_route` 显示 OCR 和文本分析是非mock路线，视觉理解仍是mock；因为本批次没有视频，语音识别不进入当前预期任务；因为当前主流程没有触发长文本切分后的跨片段汇总，汇总任务也不进入当前预期任务；
-- `real_coverage_rate` 为 66.67%，表示3类当前预期任务中有2类走非mock路线；
-- `expected_units_by_task` 基于运行前假设生成：OCR 2张图、视觉理解2帧、文本分析输入789 token和输出900 token；本批次没有视频，因此不生成语音识别用量；
-- `budget_limit_cny` 本次显式设为50元，按本地价格表估算总成本为0.022589元，因此预算检查通过；
+- `task_latency_targets_ms` 使用任务级P95目标：OCR 为60000ms，视觉理解为20000ms，语音识别为10000ms，文本分析为12000ms；这些目标是当前受控试跑闸门，不是线上生产SLA；
+- `task_latency_target_checks` 显示当前四类任务均满足受控试跑目标；这只说明可以继续小批量验证，不代表线上延迟达标；
+- `latency_bottleneck_analysis` 把慢因拆成真实外部 API、本地运行和 mock 占位；当前没有硬性延迟阻塞，但历史样本仍不能外推为稳定 SLA；
+- `current_route` 显示 OCR、视觉理解、语音识别和文本分析均为非mock路线；
+- `real_coverage_rate` 为 100%，表示当前4类预期任务都走非mock路线；
+- `expected_units_by_task` 基于运行前假设生成：OCR 12张关键帧、视觉理解12帧、文本分析输入3200 token和输出1200 token；因为未提供视频音频秒数，语音识别成本仍无法估算；
+- `budget_limit_cny` 当前未显式提供，因此预算检查为 `unknown`，不能硬判断预算是否达标；
 - `p95_latency_limit_ms` 在当前配置中保留为全局兜底值；当 `task_latency_targets_ms` 已配置时，约束检查优先使用任务级目标，避免用同一个3500ms同时要求OCR、本地推理和文本API；
 - `blocking_reasons` 为空，表示当前没有硬阻塞项；
-- `warning_messages` 会提示视觉理解仍是mock，不能解释为完整真实图片理解能力；
-- `controlled_trial_plan` 给出下一轮受控小样本建议：最多3个文件，暂不纳入视频，建议使用 `--include-files ai_content_sample.txt,img.png,img_1.png`；先解释当前报告，再决定是否授权真实API试跑。
+- `warning_messages` 会提示价格目录过期或可信度不足、预算缺少显式上限等边界；
+- `controlled_trial_plan` 会根据当前 `warning` 状态给出受控试跑边界；它只生成建议，不会自动执行真实模型调用。
 
-因此，本报告的结论不是“可以直接扩大运行”，而是：当前50元预算没有问题，任务级延迟闸门在受控试跑口径下通过，但视觉理解仍是mock，本地OCR和DeepSeek延迟也只能按各自任务解释。下一轮仍应小批量、受控范围跑，不能直接扩大到完整输入目录，更不能直接进入视频大功能。
+因此，本报告的结论不是“可以直接扩大运行”，而是：当前真实模型覆盖率达标，任务级延迟闸门在受控试跑口径下通过，但预算、价格目录和语音识别成本估算仍有边界。下一轮仍应小批量、受控范围跑，不能直接扩大到完整输入目录。
+
+如果把同一批历史延迟切换到 `production_sla` 口径，命令为：
+
+```powershell
+python .\src\main.py --preflight-only --preflight-policy production_sla --input-dir .\input\sample_videos --include-files "例子.mp4,例子1.mp4,例子2.mp4,例子3.mp4" --ocr-backend paddleocr --vision-backend qwen_vl --speech-backend dashscope_asr --text-analysis-backend deepseek --historical-model-calls .\output\batch_video_evidence_gate_check_retry\model_calls.jsonl --batch-id preflight_video_full_real_production_sla_current
+```
+
+当前生产候选 SLA 报告为 `fail`：`visual_understanding` 和 `text_analysis` 超过各自任务级 P95 目标。这说明当前路线能做受控工程验证，但还不能写成生产 SLA 达标。
 
 字段说明：
 

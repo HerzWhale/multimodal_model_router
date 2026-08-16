@@ -22,9 +22,20 @@ policies:
     p95_latency_limit_ms: 3500
     task_latency_targets_ms:
       ocr: 60000
-      visual_understanding: 3500
-      text_analysis: 8000
+      visual_understanding: 20000
+      speech_to_text: 10000
+      text_analysis: 12000
     min_real_coverage_rate: 0.40
+
+  production_sla:
+    budget_limit_cny:
+    p95_latency_limit_ms: 10000
+    task_latency_targets_ms:
+      ocr: 30000
+      visual_understanding: 10000
+      speech_to_text: 10000
+      text_analysis: 8000
+    min_real_coverage_rate: 1.00
 
 budget_expansion_multipliers:
   - 2
@@ -34,6 +45,8 @@ budget_expansion_multipliers:
 notes:
   - "budget_limit_cny 为空时，默认使用 batch_report.json 中记录的批次预算。"
   - "p95_latency_limit_ms 为空时，该策略不强制判断 P95 延迟约束。"
-  - "task_latency_targets_ms 用于给不同任务配置不同 P95 延迟目标；当前 balanced 策略中的 OCR 目标是受控本地CPU试跑阈值，不是生产SLA。"
+  - "task_latency_targets_ms 用于给不同任务配置不同 P95 延迟目标；当前 balanced 策略是受控试跑闸门，不是生产SLA。"
+  - "balanced.p95_latency_limit_ms 只是没有任务级目标时的全局兜底值；已有任务级目标时优先使用 task_latency_targets_ms。"
+  - "production_sla 是小型生产候选闸门，只检查任务级 P95 延迟和真实模型覆盖率，不包含可用性、吞吐、错误预算或告警。"
   - "min_real_coverage_rate 表示真实模型调用占全部模型调用的最低比例。"
   - "本配置只影响离线策略模拟，不会触发真实模型 API。"

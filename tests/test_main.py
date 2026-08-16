@@ -82,6 +82,7 @@ class MainTest(unittest.TestCase):
                         "deepseek_max_tokens: 1500",
                         "qwen_vl_api_key_env: TEST_DASHSCOPE_API_KEY",
                         "qwen_vl_max_tokens: 500",
+                        "qwen_vl_max_image_side: 960",
                         "default_budget_limit_cny: 50",
                         "target_output_format: jsonl",
                     "allow_partial_success: true",
@@ -318,7 +319,8 @@ class MainTest(unittest.TestCase):
             settings_text = settings_path.read_text(encoding="utf-8")
             settings_path.write_text(
                 settings_text.replace("deepseek_max_tokens: 1500", "deepseek_max_tokens: 3000")
-                .replace("qwen_vl_max_tokens: 500", "qwen_vl_max_tokens: 700"),
+                .replace("qwen_vl_max_tokens: 500", "qwen_vl_max_tokens: 700")
+                .replace("qwen_vl_max_image_side: 960", "qwen_vl_max_image_side: 480"),
                 encoding="utf-8",
             )
             mock_pipeline.return_value = {
@@ -356,6 +358,7 @@ class MainTest(unittest.TestCase):
 
         self.assertEqual(mock_pipeline.call_args.kwargs["deepseek_max_tokens"], 3000)
         self.assertEqual(mock_pipeline.call_args.kwargs["qwen_vl_max_tokens"], 700)
+        self.assertEqual(mock_pipeline.call_args.kwargs["qwen_vl_max_image_side"], 480)
 
     def test_run_batch_rejects_deepseek_without_live_permission(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

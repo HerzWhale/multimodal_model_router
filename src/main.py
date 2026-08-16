@@ -14,7 +14,7 @@ import yaml
 
 from cost_latency_tracker import load_model_prices
 from file_loader import build_file_manifest
-from model_clients import DEFAULT_DEEPSEEK_MAX_TOKENS, DEFAULT_QWEN_VL_MAX_TOKENS
+from model_clients import DEFAULT_DEEPSEEK_MAX_TOKENS, DEFAULT_QWEN_VL_MAX_IMAGE_SIDE, DEFAULT_QWEN_VL_MAX_TOKENS
 from model_router import load_routing_rules
 from pipeline_runner import run_file_pipeline
 from preprocessor import DEFAULT_MAX_KEYFRAMES
@@ -37,6 +37,7 @@ ALLOWED_OCR_BACKENDS = runtime_policy_list("runtime_backends", "ocr")
 ALLOWED_VISION_BACKENDS = runtime_policy_list("runtime_backends", "vision_understanding")
 ALLOWED_SPEECH_BACKENDS = runtime_policy_list("runtime_backends", "speech_to_text")
 ALLOWED_TEXT_BACKENDS = runtime_policy_list("runtime_backends", "text_analysis")
+DEFAULT_TEXT_ANALYSIS_EVIDENCE_CHAR_LIMIT = 6000
 
 
 def _now_iso() -> str:
@@ -296,7 +297,17 @@ def run_batch(
     speech_to_text_backend = speech_to_text_backend_override or settings.get("speech_to_text_backend", "mock")
     text_analysis_backend = text_analysis_backend_override or settings.get("text_analysis_backend", "mock")
     deepseek_max_tokens = _positive_int_setting(settings, "deepseek_max_tokens", DEFAULT_DEEPSEEK_MAX_TOKENS)
+    text_analysis_evidence_char_limit = _positive_int_setting(
+        settings,
+        "text_analysis_evidence_char_limit",
+        DEFAULT_TEXT_ANALYSIS_EVIDENCE_CHAR_LIMIT,
+    )
     qwen_vl_max_tokens = _positive_int_setting(settings, "qwen_vl_max_tokens", DEFAULT_QWEN_VL_MAX_TOKENS)
+    qwen_vl_max_image_side = _positive_int_setting(
+        settings,
+        "qwen_vl_max_image_side",
+        DEFAULT_QWEN_VL_MAX_IMAGE_SIDE,
+    )
     if ocr_backend not in ALLOWED_OCR_BACKENDS:
         raise ValueError(f"不支持的 OCR 后端：{ocr_backend}")
     if vision_understanding_backend not in ALLOWED_VISION_BACKENDS:
@@ -371,6 +382,7 @@ def run_batch(
             deepseek_model_name=settings.get("deepseek_model_name", "deepseek-v4-flash"),
             deepseek_max_retries=deepseek_max_retries,
             deepseek_max_tokens=deepseek_max_tokens,
+            text_analysis_evidence_char_limit=text_analysis_evidence_char_limit,
             qwen_vl_api_key=qwen_vl_api_key,
             qwen_vl_base_url=settings.get(
                 "qwen_vl_base_url",
@@ -379,6 +391,7 @@ def run_batch(
             qwen_vl_model_name=settings.get("qwen_vl_model_name", "qwen-vl-plus"),
             qwen_vl_max_retries=qwen_vl_max_retries,
             qwen_vl_max_tokens=qwen_vl_max_tokens,
+            qwen_vl_max_image_side=qwen_vl_max_image_side,
             dashscope_asr_api_key=dashscope_asr_api_key,
             dashscope_asr_submit_url=settings.get(
                 "dashscope_asr_submit_url",
@@ -407,6 +420,8 @@ def run_batch(
         "allow_partial_success": settings["allow_partial_success"],
         "target_output_format": settings["target_output_format"],
         "video_max_keyframes": effective_max_keyframes,
+        "text_analysis_evidence_char_limit": text_analysis_evidence_char_limit,
+        "qwen_vl_max_image_side": qwen_vl_max_image_side,
         "selected_backends": {
             "ocr_backend": ocr_backend,
             "vision_understanding_backend": vision_understanding_backend,

@@ -635,6 +635,69 @@ class RoutingPreflightTest(unittest.TestCase):
         self.assertEqual(visual_check["evidence_level"], "mock_placeholder")
         self.assertIn("mock", visual_check["reason"])
 
+    def test_controlled_trial_targets_do_not_misuse_global_latency_gate(self) -> None:
+        report = build_preflight_report(
+            routing_rules=apply_backend_overrides(
+                _routing_rules(),
+                ocr_backend="paddleocr",
+                vision_understanding_backend="qwen_vl",
+                speech_to_text_backend="dashscope_asr",
+                text_analysis_backend="deepseek",
+            ),
+            model_prices=_model_prices(),
+            policy_name="balanced",
+            policy_overrides={
+                "p95_latency_limit_ms": 3500,
+                "task_latency_targets_ms": {
+                    "ocr": 60000,
+                    "visual_understanding": 20000,
+                    "speech_to_text": 10000,
+                    "text_analysis": 12000,
+                },
+                "min_real_coverage_rate": 0.4,
+            },
+            expected_task_types=["ocr", "visual_understanding", "speech_to_text", "text_analysis"],
+            historical_p95_latency_by_task_ms={
+                "ocr": 14586,
+                "visual_understanding": 18806,
+                "speech_to_text": 7531,
+                "text_analysis": 10814,
+            },
+        )
+
+        self.assertEqual(report["constraint_checks"][2]["constraint_name"], "p95_latency_limit_ms")
+        self.assertEqual(report["constraint_checks"][2]["status"], "pass")
+        self.assertEqual(report["route_summary"]["task_latency_target_summary"]["failed_task_types"], [])
+        self.assertEqual(report["route_summary"]["task_latency_target_summary"]["max_target_ratio"], 0.9403)
+
+    def test_production_sla_policy_blocks_slow_real_tasks(self) -> None:
+        report = build_preflight_report(
+            routing_rules=apply_backend_overrides(
+                _routing_rules(),
+                ocr_backend="paddleocr",
+                vision_understanding_backend="qwen_vl",
+                speech_to_text_backend="dashscope_asr",
+                text_analysis_backend="deepseek",
+            ),
+            model_prices=_model_prices(),
+            policy_name="production_sla",
+            expected_task_types=["ocr", "visual_understanding", "speech_to_text", "text_analysis"],
+            historical_p95_latency_by_task_ms={
+                "ocr": 14586,
+                "visual_understanding": 18806,
+                "speech_to_text": 7531,
+                "text_analysis": 10814,
+            },
+        )
+
+        self.assertEqual(report["preflight_status"], "fail")
+        self.assertEqual(report["constraint_checks"][2]["status"], "fail")
+        self.assertEqual(
+            report["route_summary"]["task_latency_target_summary"]["failed_task_types"],
+            ["visual_understanding", "text_analysis"],
+        )
+        self.assertEqual(report["constraint_checks"][3]["status"], "pass")
+
     def test_mock_only_task_latency_target_is_warning_not_real_pass(self) -> None:
         report = build_preflight_report(
             routing_rules=_routing_rules(),

@@ -108,7 +108,7 @@ text_topic_evaluator 基于人工标准答案做文本主分类评估
 | `file_loader.py` | 扫描输入目录，生成文件级元数据 | 支持本地文件，不支持云存储 |
 | `preprocessor.py` | 根据文件类型做基础预处理 | 视频 V1 已能读取元信息并等距抽取最多 5 张关键帧；本机存在 ffmpeg 时可抽取单声道 16kHz wav 音频文件；缺少依赖或提取失败时记录明确状态 |
 | `model_router.py` | 根据任务类型选择供应商和模型 | 当前是固定路由，不是运行时动态推荐 |
-| `model_clients.py` | 封装 mock、本地 PaddleOCR、Qwen-VL 图片/关键帧理解和 DeepSeek 文本分析 | Qwen-VL 入口已完成离线测试、`img_1.png` 单图真实 API 验证和可重试错误最多1次重试；视频关键帧质量仍需后续受控复测 |
+| `model_clients.py` | 封装 mock、本地 PaddleOCR、Qwen-VL 图片/关键帧理解和 DeepSeek 文本分析 | Qwen-VL 入口已完成离线测试、`img_1.png` 单图真实 API 验证和可重试错误最多1次重试；发送给 Qwen-VL 的图片请求副本可按最长边配置压缩，原始文件不被修改；视频关键帧质量仍需后续受控复测 |
 | `pipeline_runner.py` | 调度文件流程，记录真实或 mock 调用、证据、成本、延迟、错误和质量风险 | PaddleOCR 和 Qwen-VL 可用于图片和视频 V1 抽出的多张关键帧；Qwen-VL 会把每次尝试分别记入模型调用；默认仍为 mock；真实OCR会经过低质量文本闸门 |
 | `cost_latency_tracker.py` | 生成模型调用成本、价格目录元数据和延迟记录 | 成本依赖本地价格配置；模型调用记录会带出价格来源、更新时间和可信度 |
 | `price_catalog_updater.py` | 从官方公开价格页抓取 Qwen-VL 和 DeepSeek 人民币价格，并生成刷新报告；带 `--apply` 时写回本地价格目录 | 不登录控制台，不读取真实账单，不调用付费模型API；写回前会检查必要计价单位、正数价格和大幅价格变化，官方页面结构变化或网络失败时会失败并输出错误 |
@@ -117,7 +117,7 @@ text_topic_evaluator 基于人工标准答案做文本主分类评估
 | `report_generator.py` | 汇总文件、成本、延迟、错误和质量统计 | 当前报告以批次为粒度 |
 | `model_strategy_advisor.py` | 基于既有批次生成模型组合策略报告，可选择使用历史成本或当前价格目录重算成本 | 离线分析，不触发外部 API；传入成本重算报告时使用 `current_repriced` 口径 |
 | `model_catalog.py` | 从调用明细聚合模型目录 | 只基于已有调用记录，不编造未知模型数据 |
-| `routing_policy.py` | 定义成本、延迟、质量和平衡策略 | 离线策略判断，不改变运行时模型调用 |
+| `routing_policy.py` | 定义成本、延迟、质量、平衡和生产候选 SLA 策略 | 离线策略判断，不改变运行时模型调用；当前 `production_sla` 只检查任务级 P95 延迟和真实模型覆盖率，不包含可用性、吞吐、错误预算或告警 |
 | `routing_preflight.py` | 在批处理前读取当前路由、价格目录、策略约束、可选输入目录和已有模型调用记录，生成运行前风险检查、规模画像、历史延迟画像、任务级延迟目标检查、价格目录画像、延迟阻塞归因和受控小样本试跑建议；推荐通过 `main.py --preflight-only` 调用 | 不调用模型，不自动换模型，不联网刷新价格；预算可基于输入规模估算，P95延迟可基于已有 `model_calls.jsonl` 判断；当配置 `task_latency_targets_ms` 时优先按 OCR、视觉理解、文本分析等任务分别检查，避免用同一个全局目标误杀不同耗时结构的任务；延迟阻塞归因会区分真实外部 API、本地运行和 mock 占位；价格目录画像只判断本地价格是否过期或可信度不足；试跑建议只生成命令参考，不会自动执行 |
 | `cost_reconciliation.py` | 根据 `model_calls.jsonl` 生成多供应商手工账单模板，并把估算成本与供应商实际扣费对比 | 不接平台账单 API，不访问网络；首版只支持人工填入统一格式账单金额，并拒绝非法金额和重复账单记录 |
 | `strategy_simulator.py` | 基于既有批次生成路由策略模拟报告 | 不触发外部 API，不重新跑批处理 |
@@ -157,6 +157,10 @@ topic / secondary_topics / tags / summary / business_use
 ```
 
 图片流程中的 OCR 证据质量闸门只处理“调用成功但文字明显不可用”的情况。此时 `ocr_text` 仍会保留在输出中，方便人工复核；但该证据不会进入 `evidence_used`，下游文本分析也不会把它当作可靠输入。文件级 `processing_status` 会变为 `partial_success`，并写入 `quality_flags=low_quality_ocr_text` 和对应 `warning_messages`。
+
+文本分析前还有一个轻量证据长度闸门：`text_analysis_evidence_char_limit` 只限制送入 DeepSeek 或 mock 文本分析模型的证据副本，降低视频证据过长造成的延迟和截断风险；输出结果中的原始 `raw_text`、`ocr_text`、`audio_transcript` 和 `visual_description` 不会被裁剪。如果发生裁剪，文件结果会记录 `quality_flags=text_analysis_evidence_truncated` 和对应 `warning_messages`。该闸门不等同于质量评估，也不证明生产 SLA 达标。
+
+Qwen-VL 视觉理解前还有一个请求图片尺寸闸门：`qwen_vl_max_image_side` 只限制发送给 Qwen-VL 的图片请求副本最长边，默认 960 像素；本地原图、PaddleOCR 输入和输出证据文件不被修改。该闸门用于控制请求体积和延迟风险，不等同于视觉理解质量提升。
 
 ### 视频流程
 

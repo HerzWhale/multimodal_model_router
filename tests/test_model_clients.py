@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 from http import client as http_client
 import json
@@ -20,6 +21,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 from model_clients import (
     DEFAULT_DEEPSEEK_MAX_TOKENS,
+    DEFAULT_QWEN_VL_MAX_IMAGE_SIDE,
     DEFAULT_QWEN_VL_MAX_TOKENS,
     DeepSeekAttemptsExhausted,
     PaddleOCRResponseError,
@@ -393,9 +395,32 @@ class ModelClientsTest(unittest.TestCase):
         payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
         self.assertEqual(payload["max_tokens"], 321)
 
+    @patch("model_clients.request.urlopen")
+    def test_qwen_vl_client_limits_image_side_before_request(self, mock_urlopen) -> None:
+        from PIL import Image
+
+        mock_urlopen.return_value = _qwen_vl_api_response(
+            json.dumps({"visual_description": "图片已压缩后发送。"}, ensure_ascii=False)
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "large.png"
+            Image.new("RGB", (200, 100), "white").save(image_path)
+            qwen_vl_image_understanding_client(image_path, api_key="test-key", max_image_side=50)
+
+        payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
+        data_url = payload["messages"][1]["content"][0]["image_url"]["url"]
+        image_bytes = base64.b64decode(data_url.split(",", 1)[1])
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            self.assertEqual(max(image.size), 50)
+
     def test_qwen_vl_client_rejects_invalid_max_tokens_before_request(self) -> None:
         with self.assertRaisesRegex(ValueError, "max_tokens"):
             qwen_vl_image_understanding_client("missing.png", api_key="test-key", max_tokens=0)
+
+    def test_qwen_vl_client_rejects_invalid_max_image_side_before_request(self) -> None:
+        with self.assertRaisesRegex(ValueError, "max_image_side"):
+            qwen_vl_image_understanding_client("missing.png", api_key="test-key", max_image_side=0)
 
     @patch("model_clients.request.urlopen")
     def test_qwen_vl_client_rejects_invalid_json_content(self, mock_urlopen) -> None:

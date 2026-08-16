@@ -62,7 +62,7 @@
 | `price_confidence` | 价格可信度，用于区分未验证手工价格、mock价格和本地外部API零成本假设 |
 | `latency_ms` | 单次模型调用耗时，单位毫秒，用于延迟分析 |
 | `latency_bottleneck_analysis` | 路由预检查中的延迟阻塞归因结果，用于区分真实外部 API、本地运行和 mock 占位三类慢因 |
-| `task_latency_targets_ms` | 按任务类型配置的 P95 延迟目标，用于让 OCR、文本分析、视觉理解等不同任务使用不同延迟闸门；当前值是受控试跑阈值，不是生产 SLA |
+| `task_latency_targets_ms` | 按任务类型配置的 P95 延迟目标，用于让 OCR、文本分析、视觉理解等不同任务使用不同延迟闸门；`balanced` 是受控试跑阈值，`production_sla` 是小型生产候选闸门 |
 | `task_latency_target_checks` | 任务级延迟目标检查明细，用于记录每个任务观察到的 P95、目标 P95、目标来源、证据口径和通过状态 |
 | `evidence_level` | 延迟或结果的证据口径，用于区分非 mock 历史、本地运行历史和 mock 占位证据，避免把 mock 延迟解释成真实供应商性能 |
 | `preprocessing_artifacts` | 文件预处理产物摘要，用于记录视频元信息、关键帧抽取状态、音频提取状态和预处理风险 |
@@ -200,7 +200,15 @@ python .\src\main.py --preflight-only --input-dir .\input\sample_videos --includ
 
 这条命令只读取本地配置、输入目录和已有历史调用记录，不执行正式批处理，不触发 DeepSeek、Qwen-VL、DashScope ASR 或 PaddleOCR，也不产生费用。它会生成 `routing_preflight_report.json` 和 `routing_preflight_report.md`，用于说明当前路线在运行前是否存在路由缺口、mock 边界、预算风险和 P95 延迟风险。
 
-当前 `output/preflight_video_full_real_current/` 的报告基于 4 个视频样本和 `output/batch_video_evidence_gate_check_retry/model_calls.jsonl` 生成。预检查结果为 `fail`：当前路线没有 mock 覆盖问题，但历史延迟中 `visual_understanding`、`speech_to_text` 和 `text_analysis` 的 P95 延迟超过当前目标，因此不建议直接扩大运行。这里的 `fail` 是运行前闸门判断，不是批处理失败。
+当前 `output/preflight_video_full_real_current/` 的报告基于 4 个视频样本和 `output/batch_video_evidence_gate_check_retry/model_calls.jsonl` 生成。预检查结果为 `warning`：当前路线没有 mock 覆盖问题，任务级 P95 延迟在受控试跑目标内，但预算上限未显式提供、部分价格目录需要刷新、语音识别成本仍缺少音频秒数估算。这里的 `warning` 表示可以继续受控试跑，不等于生产 SLA 达标。
+
+如果要按更严格的生产候选 SLA 口径检查同一批历史延迟，使用：
+
+```powershell
+python .\src\main.py --preflight-only --preflight-policy production_sla --input-dir .\input\sample_videos --include-files "例子.mp4,例子1.mp4,例子2.mp4,例子3.mp4" --ocr-backend paddleocr --vision-backend qwen_vl --speech-backend dashscope_asr --text-analysis-backend deepseek --historical-model-calls .\output\batch_video_evidence_gate_check_retry\model_calls.jsonl --batch-id preflight_video_full_real_production_sla_current
+```
+
+当前 `output/preflight_video_full_real_production_sla_current/` 的结果为 `fail`：真实模型覆盖率达标，但视觉理解和文本分析的 P95 延迟超过生产候选目标。因此当前链路可以继续受控试跑，但不能宣传为生产 SLA 达标。
 
 默认不会自动重试。只有在已明确授权真实API调用的基础上，再显式增加以下参数，才允许对可重试错误最多重试1次：
 
@@ -217,6 +225,10 @@ python .\src\reanalyze_batch_text.py --source-batch-dir .\output\历史批次 --
 ```
 
 `deepseek_max_tokens` 只控制 DeepSeek 文本分析单次输出 token 上限；`qwen_vl_max_tokens` 只控制 Qwen-VL 视觉描述单次输出 token 上限。二者越大，越可能减少截断，但也可能增加成本和延迟；它们不是质量评分。
+
+`qwen_vl_max_image_side` 控制发送给 Qwen-VL 的图片请求副本最长边，默认 960 像素。它只压缩 API 请求中的 Base64 图片，不修改本地原图、不影响 PaddleOCR 使用的原始图片；作用是降低单帧视觉理解的网络传输和模型处理延迟风险。该参数只能通过 `config/settings.yaml` 调整，是否真正降低 P95 延迟仍需要小批量真实复测验证。
+
+`text_analysis_evidence_char_limit` 控制送入文本分析模型的证据字符上限，用于降低视频证据过长带来的文本分析延迟风险。它只裁剪模型输入副本，不裁剪输出文件中的原始 `raw_text`、`ocr_text`、`audio_transcript` 和 `visual_description`。如果发生裁剪，结果会写入 `quality_flags=text_analysis_evidence_truncated` 和对应 `warning_messages`，便于负责人判断结果是否需要人工复核。该配置是延迟风险控制手段，不代表当前链路已经通过生产 SLA。
 
 默认情况下，主流程读取 `input/`，也就是普通业务输入样例。`evaluation/` 是评估样本目录，不会被默认批处理自动读取。
 
@@ -238,7 +250,9 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 | `vision_understanding_backend` | 图片或视频关键帧视觉理解后端配置；默认使用 mock，显式设为 `qwen_vl` 时才准备调用 Qwen-VL API |
 | `text_analysis_backend` | 文本分析后端配置，用来决定使用 mock 还是 DeepSeek |
 | `deepseek_max_tokens` | DeepSeek 文本分析单次输出 token 上限，用于减少长证据合并时被截断导致的空响应风险 |
+| `text_analysis_evidence_char_limit` | 文本分析输入证据字符上限，用于控制送入文本分析模型的证据长度；原始证据仍保留在结果文件中 |
 | `qwen_vl_max_tokens` | Qwen-VL 视觉理解单次输出 token 上限，用于控制画面描述长度、成本和延迟 |
+| `qwen_vl_max_image_side` | Qwen-VL 请求图片副本的最长边上限，用于降低视觉理解请求体积和延迟风险；不修改本地原图 |
 | `--vision-backend` | 命令行视觉理解后端选择，用于在小样本图片或视频关键帧上显式启用 Qwen-VL |
 | `--allow-live-api` | 真实 API 调用授权开关，用来防止 DeepSeek 或 Qwen-VL 外部请求和费用被配置文件或默认命令误触发 |
 | `--max-api-retries` | 可重试API错误的最大重试次数；默认0，只能显式设为1 |

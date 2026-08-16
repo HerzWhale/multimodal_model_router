@@ -19,6 +19,7 @@ from model_clients import (
     DEFAULT_DASHSCOPE_ASR_SUBMIT_URL,
     DEFAULT_PADDLEOCR_MODEL_NAME,
     DEFAULT_QWEN_VL_BASE_URL,
+    DEFAULT_QWEN_VL_MAX_IMAGE_SIDE,
     DEFAULT_QWEN_VL_MAX_TOKENS,
     DEFAULT_QWEN_VL_MODEL_NAME,
     DeepSeekAttemptsExhausted,
@@ -43,6 +44,9 @@ LOW_QUALITY_OCR_WARNING = "OCR 返回了非空文字，但文本疑似乱码或�
 VIDEO_OCR_KEYFRAME_FAILED_FLAG = "video_ocr_keyframe_failed"
 VIDEO_VISUAL_KEYFRAME_FAILED_FLAG = "video_visual_keyframe_failed"
 VIDEO_EVIDENCE_WEAK_FLAG = "video_evidence_weak"
+TEXT_ANALYSIS_EVIDENCE_TRUNCATED_FLAG = "text_analysis_evidence_truncated"
+TEXT_ANALYSIS_EVIDENCE_TRUNCATED_WARNING = "文本分析输入证据超过配置上限，系统已裁剪送入文本分析模型的证据副本；原始证据仍保留在输出结果中。"
+TEXT_ANALYSIS_EVIDENCE_KEYS = ("raw_text", "ocr_text", "audio_transcript", "visual_description")
 STATUS_AFFECTING_QUALITY_FLAGS = {
     LOW_QUALITY_OCR_FLAG,
     VIDEO_OCR_KEYFRAME_FAILED_FLAG,
@@ -152,6 +156,37 @@ def _is_low_quality_ocr_text(ocr_text: str | None) -> bool:
         and single_char_line_ratio >= LOW_QUALITY_OCR_MIN_SINGLE_CHAR_LINE_RATIO
         and ascii_noise_line_ratio >= LOW_QUALITY_OCR_MIN_ASCII_NOISE_LINE_RATIO
     )
+
+
+def _limit_text_analysis_evidence(
+    evidence: dict[str, Any],
+    max_chars: int | None,
+) -> tuple[dict[str, Any], bool]:
+    """限制送入文本分析模型的证据长度，原始证据由结果对象继续保留。"""
+
+    limited_evidence = dict(evidence)
+    if max_chars is None:
+        return limited_evidence, False
+    if max_chars < 1:
+        raise ValueError("文本分析证据字符上限必须大于等于 1。")
+
+    active_keys = [
+        key
+        for key in TEXT_ANALYSIS_EVIDENCE_KEYS
+        if isinstance(limited_evidence.get(key), str) and limited_evidence[key]
+    ]
+    if not active_keys:
+        return limited_evidence, False
+
+    per_key_limit = max(1, max_chars // len(active_keys))
+    truncated = False
+    for key in active_keys:
+        value = limited_evidence[key]
+        if len(value) <= per_key_limit:
+            continue
+        limited_evidence[key] = value[: max(0, per_key_limit - 1)] + "…"
+        truncated = True
+    return limited_evidence, truncated
 
 
 def _build_success_call(
@@ -397,11 +432,13 @@ def run_file_pipeline(
     deepseek_model_name: str = "deepseek-v4-flash",
     deepseek_max_retries: int = 0,
     deepseek_max_tokens: int = DEFAULT_DEEPSEEK_MAX_TOKENS,
+    text_analysis_evidence_char_limit: int | None = None,
     qwen_vl_api_key: str | None = None,
     qwen_vl_base_url: str = DEFAULT_QWEN_VL_BASE_URL,
     qwen_vl_model_name: str = DEFAULT_QWEN_VL_MODEL_NAME,
     qwen_vl_max_retries: int = 0,
     qwen_vl_max_tokens: int = DEFAULT_QWEN_VL_MAX_TOKENS,
+    qwen_vl_max_image_side: int = DEFAULT_QWEN_VL_MAX_IMAGE_SIDE,
     dashscope_asr_api_key: str | None = None,
     dashscope_asr_submit_url: str = DEFAULT_DASHSCOPE_ASR_SUBMIT_URL,
     dashscope_asr_model_name: str = DEFAULT_DASHSCOPE_ASR_MODEL_NAME,
@@ -419,6 +456,8 @@ def run_file_pipeline(
         raise ValueError(f"不支持的视觉理解后端: {vision_understanding_backend}")
     if speech_to_text_backend not in ALLOWED_SPEECH_BACKENDS:
         raise ValueError(f"不支持的语音识别后端: {speech_to_text_backend}")
+    if text_analysis_evidence_char_limit is not None and text_analysis_evidence_char_limit < 1:
+        raise ValueError("文本分析证据字符上限必须大于等于 1。")
     pipeline_started_at = perf_counter()
     injected_failures = fault_injection or {}
     preprocessed = preprocess_file(
@@ -569,6 +608,7 @@ def run_file_pipeline(
                         base_url=qwen_vl_base_url,
                         max_retries=qwen_vl_max_retries,
                         max_tokens=qwen_vl_max_tokens,
+                        max_image_side=qwen_vl_max_image_side,
                     )
                     vision_api_usage = vision_result.pop("_api_usage", {})
                     vision_response_model_name = vision_result.pop("_response_model_name", None)
@@ -833,6 +873,7 @@ def run_file_pipeline(
                             base_url=qwen_vl_base_url,
                             max_retries=qwen_vl_max_retries,
                             max_tokens=qwen_vl_max_tokens,
+                            max_image_side=qwen_vl_max_image_side,
                         )
                         vision_api_usage = vision_result.pop("_api_usage", {})
                         vision_response_model_name = vision_result.pop("_response_model_name", None)
@@ -1049,6 +1090,15 @@ def run_file_pipeline(
     analysis_evidence = dict(evidence)
     if LOW_QUALITY_OCR_FLAG in quality_flags:
         analysis_evidence["ocr_text"] = None
+    analysis_evidence, evidence_truncated = _limit_text_analysis_evidence(
+        analysis_evidence,
+        text_analysis_evidence_char_limit,
+    )
+    if evidence_truncated:
+        if TEXT_ANALYSIS_EVIDENCE_TRUNCATED_FLAG not in quality_flags:
+            quality_flags.append(TEXT_ANALYSIS_EVIDENCE_TRUNCATED_FLAG)
+        if TEXT_ANALYSIS_EVIDENCE_TRUNCATED_WARNING not in warning_messages:
+            warning_messages.append(TEXT_ANALYSIS_EVIDENCE_TRUNCATED_WARNING)
 
     evidence_text = " ".join(str(value) for value in analysis_evidence.values() if value)
     analysis_started_at = perf_counter()

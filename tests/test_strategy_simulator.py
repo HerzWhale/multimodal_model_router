@@ -74,7 +74,7 @@ class StrategySimulatorTest(unittest.TestCase):
         report = simulate_routing_policies(_batch_report(), _model_calls(), generated_at="2026-07-19T10:00:00+08:00")
 
         self.assertEqual(report["report_type"], "routing_policy_simulation")
-        self.assertEqual(set(report["policy_results"]), {"budget_first", "latency_first", "quality_first", "balanced"})
+        self.assertEqual(set(report["policy_results"]), {"budget_first", "latency_first", "quality_first", "balanced", "production_sla"})
         self.assertEqual(report["current_call_structure"]["real_model_calls"], 1)
         self.assertEqual(report["current_call_structure"]["mock_model_calls"], 1)
 

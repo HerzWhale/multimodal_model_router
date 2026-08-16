@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 from http import client as http_client
 import json
 import mimetypes
@@ -33,6 +34,7 @@ DEFAULT_DASHSCOPE_ASR_MODEL_NAME = "paraformer-v2"
 DEFAULT_DASHSCOPE_ASR_SUBMIT_URL = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
 DEFAULT_DEEPSEEK_MAX_TOKENS = 2500
 DEFAULT_QWEN_VL_MAX_TOKENS = 500
+DEFAULT_QWEN_VL_MAX_IMAGE_SIDE = 960
 DEEPSEEK_CONTENT_PREVIEW_CHARS = 120
 DEEPSEEK_COMPACT_EVIDENCE_CHARS = 500
 
@@ -535,6 +537,7 @@ def qwen_vl_image_understanding_client(
     timeout_seconds: int = 60,
     max_retries: int = 0,
     max_tokens: int = DEFAULT_QWEN_VL_MAX_TOKENS,
+    max_image_side: int = DEFAULT_QWEN_VL_MAX_IMAGE_SIDE,
 ) -> dict[str, Any]:
     """调用 Qwen-VL 图片理解 API，返回标准化画面描述。"""
 
@@ -543,6 +546,7 @@ def qwen_vl_image_understanding_client(
     if max_retries not in {0, 1}:
         raise ValueError("Qwen-VL 最大重试次数只能是 0 或 1。")
     max_tokens = _require_positive_int(max_tokens, "Qwen-VL max_tokens")
+    max_image_side = _require_positive_int(max_image_side, "Qwen-VL max_image_side")
 
     path = Path(image_path)
     if not path.is_file():
@@ -552,7 +556,7 @@ def qwen_vl_image_understanding_client(
 
     payload = {
         "model": model_name,
-        "messages": _build_qwen_vl_messages(path),
+        "messages": _build_qwen_vl_messages(path, max_image_side=max_image_side),
         "temperature": 0.2,
         "max_tokens": max_tokens,
         "stream": False,
@@ -605,7 +609,11 @@ def qwen_vl_image_understanding_client(
     raise AssertionError("Qwen-VL 调用循环未返回结果。")
 
 
-def _build_qwen_vl_messages(image_path: Path) -> list[dict[str, Any]]:
+def _build_qwen_vl_messages(
+    image_path: Path,
+    *,
+    max_image_side: int | None = None,
+) -> list[dict[str, Any]]:
     """构造 Qwen-VL 图片理解提示词。"""
 
     system_prompt = """
@@ -626,22 +634,51 @@ visual_description 必须是中文，控制在 300 字以内。
         {
             "role": "user",
             "content": [
-                {"type": "image_url", "image_url": {"url": _image_to_data_url(image_path)}},
+                {"type": "image_url", "image_url": {"url": _image_to_data_url(image_path, max_image_side=max_image_side)}},
                 {"type": "text", "text": user_prompt},
             ],
         },
     ]
 
 
-def _image_to_data_url(image_path: Path) -> str:
+def _image_to_data_url(image_path: Path, *, max_image_side: int | None = None) -> str:
     """把本地图片转换成 OpenAI 兼容接口可接收的 Base64 Data URL。"""
 
     mime_type = mimetypes.guess_type(str(image_path))[0]
     if not mime_type or not mime_type.startswith("image/"):
         raise ValueError(f"不支持的视觉理解图片类型：{image_path.suffix or '无后缀'}")
 
-    encoded_image = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    encoded_image = base64.b64encode(_read_image_bytes_for_qwen_vl(image_path, max_image_side)).decode("ascii")
     return f"data:{mime_type};base64,{encoded_image}"
+
+
+def _read_image_bytes_for_qwen_vl(image_path: Path, max_image_side: int | None) -> bytes:
+    """读取 Qwen-VL 输入图片；超过最长边上限时只压缩请求副本。"""
+
+    original_bytes = image_path.read_bytes()
+    if max_image_side is None:
+        return original_bytes
+
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("限制 Qwen-VL 图片尺寸需要 Pillow。") from exc
+
+    try:
+        with Image.open(BytesIO(original_bytes)) as image:
+            if max(image.size) <= max_image_side:
+                return original_bytes
+            image.thumbnail((max_image_side, max_image_side))
+            output = BytesIO()
+            image_format = image.format or image_path.suffix.lstrip(".") or "PNG"
+            if image_format.upper() == "JPG":
+                image_format = "JPEG"
+            if image_format.upper() == "JPEG" and image.mode not in {"RGB", "L"}:
+                image = image.convert("RGB")
+            image.save(output, format=image_format)
+            return output.getvalue()
+    except OSError:
+        return original_bytes
 
 
 def _perform_qwen_vl_request(

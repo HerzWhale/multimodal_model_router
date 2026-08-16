@@ -15,6 +15,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 from cost_latency_tracker import load_model_prices
 from model_clients import (
+    DEFAULT_QWEN_VL_MAX_IMAGE_SIDE,
     DEFAULT_QWEN_VL_MAX_TOKENS,
     DeepSeekAttemptsExhausted,
     DeepSeekResponseError,
@@ -247,6 +248,7 @@ class PipelineRunnerTest(unittest.TestCase):
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             max_retries=0,
             max_tokens=DEFAULT_QWEN_VL_MAX_TOKENS,
+            max_image_side=DEFAULT_QWEN_VL_MAX_IMAGE_SIDE,
         )
 
     @patch("pipeline_runner.qwen_vl_image_understanding_client")
@@ -491,6 +493,7 @@ class PipelineRunnerTest(unittest.TestCase):
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             max_retries=0,
             max_tokens=DEFAULT_QWEN_VL_MAX_TOKENS,
+            max_image_side=DEFAULT_QWEN_VL_MAX_IMAGE_SIDE,
         )
 
     @patch("pipeline_runner.qwen_vl_image_understanding_client")
@@ -552,6 +555,7 @@ class PipelineRunnerTest(unittest.TestCase):
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             max_retries=1,
             max_tokens=DEFAULT_QWEN_VL_MAX_TOKENS,
+            max_image_side=DEFAULT_QWEN_VL_MAX_IMAGE_SIDE,
         )
 
     @patch("pipeline_runner.qwen_vl_image_understanding_client")
@@ -949,6 +953,47 @@ class PipelineRunnerTest(unittest.TestCase):
             max_retries=1,
             max_tokens=3000,
         )
+
+    @patch("pipeline_runner.deepseek_text_analysis_client")
+    def test_deepseek_receives_limited_evidence_and_result_keeps_original_text(self, mock_deepseek) -> None:
+        mock_deepseek.return_value = {
+            "topic": "technology",
+            "secondary_topics": [],
+            "tags": ["输入压缩"],
+            "summary": "文本分析证据已完成受控压缩。",
+            "business_use": "可用于内容归档、检索和人工复核。",
+            "_api_usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+            "_api_attempts": [
+                {
+                    "status": "success",
+                    "latency_ms": 500,
+                    "api_usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+                    "error_message": None,
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "long.txt"
+            original_text = "甲" * 120
+            path.write_text(original_text, encoding="utf-8")
+            output = run_file_pipeline(
+                self._file_record(path, "text"),
+                self.routing_rules,
+                self.model_prices,
+                text_analysis_backend="deepseek",
+                deepseek_api_key="test-key",
+                text_analysis_evidence_char_limit=20,
+            )
+
+        sent_evidence = mock_deepseek.call_args.args[0]
+        result = output["result"]
+        self.assertEqual(result["raw_text"], original_text)
+        self.assertEqual(len(sent_evidence["raw_text"]), 20)
+        self.assertTrue(sent_evidence["raw_text"].endswith("…"))
+        self.assertEqual(result["processing_status"], "success")
+        self.assertIn("text_analysis_evidence_truncated", result["quality_flags"])
+        self.assertTrue(any("裁剪" in warning for warning in result["warning_messages"]))
 
     @patch("pipeline_runner.deepseek_text_analysis_client")
     def test_deepseek_exhausted_retries_records_both_failed_attempts(self, mock_deepseek) -> None:

@@ -56,6 +56,21 @@ POLICY_DEFINITIONS: dict[str, dict[str, Any]] = {
             "min_real_coverage_rate": 0.4,
         },
     },
+    "production_sla": {
+        "display_name": "生产 SLA 候选",
+        "primary_objective": "用更严格的任务级 P95 延迟和真实模型覆盖率，判断当前路线是否接近可生产化。",
+        "default_constraints": {
+            "budget_limit_cny": None,
+            "p95_latency_limit_ms": 10000,
+            "task_latency_targets_ms": {
+                "ocr": 30000,
+                "visual_understanding": 10000,
+                "speech_to_text": 10000,
+                "text_analysis": 8000,
+            },
+            "min_real_coverage_rate": 1.0,
+        },
+    },
 }
 
 
@@ -308,6 +323,16 @@ def _strategy_recommendation(policy_name: str, catalog_summary: dict[str, Any], 
             ],
             "tradeoff_explanation": "平衡策略适合内容平台试点：先证明关键证据链可靠，再逐步扩大真实多模态调用比例。",
             "risk_warnings": ["当前真实覆盖率仍不足，适合试点不适合宣称全真实多模态平台"] if status != "pass" else [],
+        }
+    if policy_name == "production_sla":
+        return {
+            "recommended_combo": [
+                "只把通过任务级 P95 和真实覆盖率检查的路线作为生产候选",
+                "未通过的任务先缩短输入、减少关键帧或更换模型，不直接扩大运行",
+                "SLA 结论只基于已有历史批次，不外推为长期线上承诺",
+            ],
+            "tradeoff_explanation": "生产 SLA 候选策略比受控试跑更严格，用于提前暴露视觉理解、语音识别、文本分析等环节是否会成为上线阻塞。",
+            "risk_warnings": ["当前历史样本量仍小，SLA 只能作为候选闸门，不能替代线上监控。"] if status != "pass" else [],
         }
     return {
         "recommended_combo": [],
