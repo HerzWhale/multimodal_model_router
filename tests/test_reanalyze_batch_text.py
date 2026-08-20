@@ -91,6 +91,7 @@ class ReanalyzeBatchTextTest(unittest.TestCase):
             model_prices=MODEL_PRICES,
             max_retries=0,
             max_tokens=3000,
+            compact_mode=True,
         )
 
         self.assertEqual(errors, [])
@@ -104,6 +105,7 @@ class ReanalyzeBatchTextTest(unittest.TestCase):
         self.assertEqual(model_calls[0]["latency_ms"], 1234)
         self.assertEqual(model_calls[0]["cost_cny"], 0.0002)
         self.assertEqual(mock_deepseek.call_args.kwargs["max_tokens"], 3000)
+        self.assertTrue(mock_deepseek.call_args.kwargs["compact_mode"])
 
     @patch("reanalyze_batch_text.deepseek_text_analysis_client")
     def test_reanalyze_records_keeps_failed_and_success_attempts(self, mock_deepseek) -> None:

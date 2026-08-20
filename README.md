@@ -4,7 +4,24 @@
 
 系统目标不是做一个单点内容分类器，而是把文本、图片、视频文件统一接入，拆成可追踪的处理任务，并记录模型调用、成本、延迟、证据来源和错误状态。它要解决的是 AI 团队在批量处理内容素材时常见的工程问题：输入不统一、输出不统一、模型调用过程不可追踪、成本和延迟难以复盘。
 
-当前版本必须诚实说明边界：DeepSeek 文本分析已经完成真实调用验证；图片 OCR 已接入本地 PaddleOCR，并用五张正式图片完成本地 CPU 推理与分段评估，其中 `img_7.jpg`、`img_8.jpg`、`img_9.jpg` 来自真实视频关键帧信息图。图片视觉理解已新增受保护的 Qwen-VL API 接入入口，并已完成 `img_1.png` 单图真实 API 验证；但默认仍为 mock，且该单图批次中的 OCR 和文本分析仍是 mock。视频预处理已从 V0 第一帧升级到 V1 多关键帧，可以读取视频元信息并等距抽取最多 5 张关键帧；这些关键帧可以按配置进入 PaddleOCR 或 Qwen-VL，Qwen-VL 已支持可重试错误最多重试1次并逐次记录调用，但默认仍为 mock。视频音频提取已新增本地 ffmpeg 最小闭环：本机存在 ffmpeg 且提取成功时会生成 wav 音频文件，并进入现有 mock 语音识别分支；真实 ASR 尚未接入，因此当前验证仍不能证明完整多模态理解质量。
+当前版本必须诚实说明边界：DeepSeek 文本分析已经完成真实调用验证；图片 OCR 已接入本地 PaddleOCR，并用五张正式图片完成本地 CPU 推理与分段评估，其中 `img_7.jpg`、`img_8.jpg`、`img_9.jpg` 来自真实视频关键帧信息图。图片和视频关键帧视觉理解已支持受保护的 Qwen-VL API 入口，且完成过单图和视频关键帧真实验证；视频音频提取依赖本地 ffmpeg，真实语音识别可显式选择 DashScope ASR。默认后端仍保持 mock，必须显式选择真实后端并提供 `--allow-live-api` 才会访问外部 API。当前链路已满足一期 MVP 功能闭环，但 3 视频生产候选 SLA 预检查仍因 `text_analysis` P95 延迟 11567ms 高于 8000ms 目标而失败，因此不能宣传为生产 SLA 达标。
+
+## 当前阶段状态
+
+| 阶段 | 结论 | 依据 | 下一步 |
+|---|---|---|---|
+| 一期：MVP 闭环 | 已结束 | 已跑通统一输入、文件分流、PaddleOCR、Qwen-VL、DashScope ASR、DeepSeek、模型调用记录、成本估算、延迟记录、错误记录和人工可读输出 | 不再继续把一期拖在样本复核里 |
+| 二期：真实链路稳定化 | 已启动 | `output/batch_video_compact_3files_regression_20260820/` 证明 3 视频文本重分析分类稳定，但 `output/preflight_video_compact_3files_regression_20260820/` 仍显示生产候选 SLA 未通过 | 优先做小批量真实链路稳定性、SLA 口径和成本对账收束 |
+
+字段说明：
+
+| 字段 | 含义与作用 |
+|---|---|
+| `text_analysis` | 文本分析任务类型，用于把 OCR、视觉描述和音频转写整合为最终分类、关键词、摘要和业务用途 |
+| `preflight_status` | 运行前预检查状态，用于判断当前路线是否建议扩大运行 |
+| `latency_ms` | 单次模型调用耗时，用于判断任务是否超过 SLA |
+| `topic` | 主分类，表示内容最主要的业务归属 |
+| `secondary_topics` | 副分类，表示内容涉及的交叉领域 |
 
 ## 1. 项目定位
 
@@ -132,7 +149,7 @@ python .\src\main.py --text-analysis-backend deepseek --allow-live-api
 python .\src\main.py --ocr-backend paddleocr
 ```
 
-`--ocr-backend paddleocr` 可作用于图片文件和视频 V1 抽出的最多 5 张关键帧，不需要 API 密钥或 `--allow-live-api`。这仍不代表完整视频 OCR；视频音频提取依赖本机 ffmpeg，真实语音识别仍未实现。
+`--ocr-backend paddleocr` 可作用于图片文件和视频 V1 抽出的关键帧，不需要 API 密钥或 `--allow-live-api`。这仍不代表完整视频 OCR；视频音频提取依赖本机 ffmpeg，真实语音识别需要显式选择 DashScope ASR 并授权真实 API。
 
 显式使用 PaddleOCR 时，主流程会对非空 `ocr_text` 做一个保守质量闸门：如果文本高度碎片化或疑似乱码，文件不会被当成完全成功，而会写入 `quality_flags=low_quality_ocr_text` 和对应 `warning_messages`，并把文件级 `processing_status` 调整为 `partial_success`。这类情况不代表 OCR 调用失败，所以 `model_calls.jsonl` 中该 OCR 调用仍会保留为 `success`，但下游文本分析不会把这段 OCR 文字当成可靠证据。
 
@@ -158,7 +175,7 @@ $env:DASHSCOPE_API_KEY = "你的阿里云百炼 / DashScope API Key"
 python .\src\main.py --input-dir .\input --include-files img_1.png --vision-backend qwen_vl --allow-live-api --batch-id batch_qwen_vl_image_trial
 ```
 
-`--vision-backend qwen_vl` 可作用于图片文件和视频 V1 抽出的最多 5 张关键帧。该入口会把 Qwen-VL 返回的画面描述写入 `visual_description`，并在 `model_calls.jsonl` 中记录供应商、请求模型名、服务端响应模型名、输入输出 token、成本、延迟和状态。未设置 `DASHSCOPE_API_KEY` 或未提供 `--allow-live-api` 时，程序会在发送网络请求前停止。当前已有 `img_1.png` 单图真实 API 验证和一个视频5关键帧真实试跑；视频试跑中曾出现单帧网络断开，因此当前代码已补充关键帧级受控重试，但仍需要用户再次手动复测。
+`--vision-backend qwen_vl` 可作用于图片文件和视频 V1 抽出的关键帧。该入口会把 Qwen-VL 返回的画面描述写入 `visual_description`，并在 `model_calls.jsonl` 中记录供应商、请求模型名、服务端响应模型名、输入输出 token、成本、延迟和状态。未设置 `DASHSCOPE_API_KEY` 或未提供 `--allow-live-api` 时，程序会在发送网络请求前停止。当前已有 `img_1.png` 单图真实 API 验证和视频关键帧真实试跑；视频试跑中曾出现单帧网络断开，因此代码已补充关键帧级受控重试。
 
 如需只跑视频 V1 多关键帧预处理闭环，可以使用当前样例视频：
 
@@ -182,7 +199,7 @@ python .\src\main.py --input-dir .\input\sample_videos --include-files 例子.mp
 python .\src\main.py --input-dir .\input\sample_videos --include-files 例子.mp4 --vision-backend qwen_vl --allow-live-api --text-analysis-backend mock --batch-id batch_video_keyframes_qwen_vl_trial
 ```
 
-这条命令会访问 Qwen-VL 并产生可能的 API 费用；默认不会自动执行。它只处理最多 5 张等距关键帧，不能证明整段视频理解能力。
+这条命令会访问 Qwen-VL 并产生可能的 API 费用；默认不会自动执行。它只处理本次抽取出的关键帧，不能证明整段视频理解能力。
 
 如果要对视频关键帧 Qwen-VL 的可重试网络错误启用一次受控重试，可以额外加：
 
@@ -226,6 +243,8 @@ python .\src\reanalyze_batch_text.py --source-batch-dir .\output\历史批次 --
 
 `deepseek_max_tokens` 只控制 DeepSeek 文本分析单次输出 token 上限；`qwen_vl_max_tokens` 只控制 Qwen-VL 视觉描述单次输出 token 上限。二者越大，越可能减少截断，但也可能增加成本和延迟；它们不是质量评分。
 
+`deepseek_compact_mode` 控制 DeepSeek 文本分析是否首发使用短输出模式。开启后系统会复用已有 compact 提示词，把 `summary` 控制在 80 字以内、`business_use` 控制在 40 字以内，并压缩送入模型的证据副本。它用于降低文本分析延迟风险；原始证据仍保留在输出文件中，不能把它解释为质量提升。
+
 `qwen_vl_max_image_side` 控制发送给 Qwen-VL 的图片请求副本最长边，默认 960 像素。它只压缩 API 请求中的 Base64 图片，不修改本地原图、不影响 PaddleOCR 使用的原始图片；作用是降低单帧视觉理解的网络传输和模型处理延迟风险。该参数只能通过 `config/settings.yaml` 调整，是否真正降低 P95 延迟仍需要小批量真实复测验证。
 
 `text_analysis_evidence_char_limit` 控制送入文本分析模型的证据字符上限，用于降低视频证据过长带来的文本分析延迟风险。它只裁剪模型输入副本，不裁剪输出文件中的原始 `raw_text`、`ocr_text`、`audio_transcript` 和 `visual_description`。如果发生裁剪，结果会写入 `quality_flags=text_analysis_evidence_truncated` 和对应 `warning_messages`，便于负责人判断结果是否需要人工复核。该配置是延迟风险控制手段，不代表当前链路已经通过生产 SLA。
@@ -250,6 +269,7 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 | `vision_understanding_backend` | 图片或视频关键帧视觉理解后端配置；默认使用 mock，显式设为 `qwen_vl` 时才准备调用 Qwen-VL API |
 | `text_analysis_backend` | 文本分析后端配置，用来决定使用 mock 还是 DeepSeek |
 | `deepseek_max_tokens` | DeepSeek 文本分析单次输出 token 上限，用于减少长证据合并时被截断导致的空响应风险 |
+| `deepseek_compact_mode` | DeepSeek 文本分析短输出模式开关，用于减少首发请求证据和输出负担；默认开启以降低视频文本分析延迟风险 |
 | `text_analysis_evidence_char_limit` | 文本分析输入证据字符上限，用于控制送入文本分析模型的证据长度；原始证据仍保留在结果文件中 |
 | `qwen_vl_max_tokens` | Qwen-VL 视觉理解单次输出 token 上限，用于控制画面描述长度、成本和延迟 |
 | `qwen_vl_max_image_side` | Qwen-VL 请求图片副本的最长边上限，用于降低视觉理解请求体积和延迟风险；不修改本地原图 |

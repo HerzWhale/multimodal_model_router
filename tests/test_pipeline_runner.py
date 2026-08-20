@@ -952,6 +952,7 @@ class PipelineRunnerTest(unittest.TestCase):
             base_url="https://api.deepseek.com",
             max_retries=1,
             max_tokens=3000,
+            compact_mode=False,
         )
 
     @patch("pipeline_runner.deepseek_text_analysis_client")
@@ -983,6 +984,7 @@ class PipelineRunnerTest(unittest.TestCase):
                 self.model_prices,
                 text_analysis_backend="deepseek",
                 deepseek_api_key="test-key",
+                deepseek_compact_mode=True,
                 text_analysis_evidence_char_limit=20,
             )
 
@@ -994,6 +996,7 @@ class PipelineRunnerTest(unittest.TestCase):
         self.assertEqual(result["processing_status"], "success")
         self.assertIn("text_analysis_evidence_truncated", result["quality_flags"])
         self.assertTrue(any("裁剪" in warning for warning in result["warning_messages"]))
+        self.assertTrue(mock_deepseek.call_args.kwargs["compact_mode"])
 
     @patch("pipeline_runner.deepseek_text_analysis_client")
     def test_deepseek_exhausted_retries_records_both_failed_attempts(self, mock_deepseek) -> None:

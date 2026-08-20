@@ -852,6 +852,7 @@ def deepseek_text_analysis_client(
     timeout_seconds: int = 60,
     max_retries: int = 0,
     max_tokens: int = DEFAULT_DEEPSEEK_MAX_TOKENS,
+    compact_mode: bool = False,
 ) -> dict[str, Any]:
     """调用 DeepSeek API，返回标准化后的内容分析结果。"""
 
@@ -863,7 +864,7 @@ def deepseek_text_analysis_client(
 
     payload = {
         "model": model_name,
-        "messages": _build_deepseek_messages(evidence),
+        "messages": _build_deepseek_messages(evidence, compact=compact_mode),
         "response_format": {"type": "json_object"},
         "temperature": 0.2,
         "max_tokens": max_tokens,

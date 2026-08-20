@@ -160,6 +160,8 @@ topic / secondary_topics / tags / summary / business_use
 
 文本分析前还有一个轻量证据长度闸门：`text_analysis_evidence_char_limit` 只限制送入 DeepSeek 或 mock 文本分析模型的证据副本，降低视频证据过长造成的延迟和截断风险；输出结果中的原始 `raw_text`、`ocr_text`、`audio_transcript` 和 `visual_description` 不会被裁剪。如果发生裁剪，文件结果会记录 `quality_flags=text_analysis_evidence_truncated` 和对应 `warning_messages`。该闸门不等同于质量评估，也不证明生产 SLA 达标。
 
+DeepSeek 文本分析还支持 `deepseek_compact_mode`。开启后首发请求会使用已有 compact 提示词和短证据副本，要求更短的 `summary` 与 `business_use`，用于降低文本分析延迟风险；输出结构仍保持 `topic`、`secondary_topics`、`tags`、`summary` 和 `business_use` 不变。
+
 Qwen-VL 视觉理解前还有一个请求图片尺寸闸门：`qwen_vl_max_image_side` 只限制发送给 Qwen-VL 的图片请求副本最长边，默认 960 像素；本地原图、PaddleOCR 输入和输出证据文件不被修改。该闸门用于控制请求体积和延迟风险，不等同于视觉理解质量提升。
 
 ### 视频流程
@@ -189,7 +191,7 @@ topic / secondary_topics / tags / summary / business_use
 |---|---|
 | `raw_text` | 文本原文，是文本分析模型的主要证据来源 |
 | `ocr_text` | OCR 提取的文字证据；图片和视频 V1 多张关键帧可选择本地 PaddleOCR；无文字时允许为空 |
-| `audio_transcript` | 音频转写文字；当前真实 ASR 尚未接入，只有本地音频提取成功后才会进入 mock 语音识别占位分支 |
+| `audio_transcript` | 音频转写文字；本地 ffmpeg 提取音频后，可显式选择 DashScope ASR 生成真实转写；默认仍为 mock |
 | `visual_description` | 图片或关键帧的视觉描述；图片和视频 V1 多张关键帧可显式选择 Qwen-VL API |
 | `preprocessing_artifacts` | 文件预处理产物摘要，用于记录视频元信息、关键帧抽取状态、音频提取状态和预处理风险 |
 | `keyframe_paths` | 视频 V1 抽出的关键帧路径列表，用于追踪视频画面证据来自哪些本地产物 |
@@ -218,7 +220,8 @@ topic / secondary_topics / tags / summary / business_use
 | 图片视觉理解默认任务 | `qwen / mock-vision` | mock |
 | 图片视觉理解可选任务 | `qwen / qwen-vl-plus` | 受保护 API 入口已实现，并已完成 `img_1.png` 单图真实验证 |
 | 视频关键帧视觉理解可选任务 | `qwen / qwen-vl-plus` | 可处理视频 V1 抽出的最多 5 张关键帧；需要 `--allow-live-api`；支持可重试错误最多重试1次，并逐次记录调用；已有一次视频真实试跑但需复测可靠性 |
-| 语音识别任务 | `doubao / mock-asr` | 真实 ASR 未接入；本地音频提取成功时会进入 mock 语音识别分支，音频缺失时记录失败且不虚算 ASR 用量 |
+| 语音识别默认任务 | `doubao / mock-asr` | mock；用于离线流程验证，不代表真实音频识别能力 |
+| 语音识别可选任务 | `dashscope / paraformer-v2` | 已接入受保护真实 ASR；需要本地 ffmpeg 成功抽取音频、提供 DashScope API Key 并显式使用 `--allow-live-api` |
 | 文本分析任务 | `deepseek / deepseek-v4-flash` | 真实调用 |
 
 离线决策层不替代运行时路由器：
@@ -452,7 +455,7 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 ## 8. 当前架构限制
 
 - 真实模型证据覆盖 DeepSeek 文本分析和 PaddleOCR 图片文字提取；PaddleOCR已完成五张正式图片、共151段人工业务文字评估，但样本量仍不足以外推生产质量。
-- 图片 OCR 默认仍为 mock，显式选择后才使用本地 PaddleOCR；图片视觉理解默认仍为 mock，已支持显式选择 Qwen-VL API，并已完成 `img_1.png` 单图真实验证；视频 V1 抽出的多张关键帧已经能接入 PaddleOCR 或 Qwen-VL，且 Qwen-VL 关键帧级重试已完成离线测试；语音识别仍未真实实现。
+- 图片 OCR 默认仍为 mock，显式选择后才使用本地 PaddleOCR；图片视觉理解默认仍为 mock，已支持显式选择 Qwen-VL API，并已完成 `img_1.png` 单图真实验证；视频 V1 抽出的多张关键帧已经能接入 PaddleOCR 或 Qwen-VL，且 Qwen-VL 关键帧级重试已完成离线测试；语音识别默认仍为 mock，但可显式选择 DashScope ASR。
 - 当前 Qwen-VL 真实证据覆盖单张图片和一次视频5关键帧试跑；视频试跑中4帧成功、1帧网络失败，说明链路可运行但可靠性还需要复测。当 `ocr_text` 被低质量闸门判为不可用时，下游文本分析会忽略该OCR证据，但仍会保留原始OCR文字供复核。因此不能把文件级结构化结果解释为完整图片或视频理解质量。
 - Paddle 底层推理器对中文路径仍不稳定；本轮直接使用 H 盘中文路径时模型创建失败，改用临时英文盘符映射和 `PADDLE_PDX_CACHE_HOME` 后成功运行。代码尚未自动处理该环境问题。
 - 当前本地 CPU 实测中，`img_1.png` 的 OCR 调用耗时15733ms；`img_2.png` 独立冷启动批次耗时51096ms；三张关键帧图片的 OCR 平均延迟为18006ms、P95延迟为28261ms。当前 OCR 延迟仍高于既定图片2秒目标，且本地资源成本也未计量。
@@ -461,7 +464,7 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 - 已完成 `img_9.jpg` OCR 延迟拆分：引擎创建8834ms，首次模型推理60373ms，热启动第二次模型推理56042ms；图片解码15ms/10ms、结果解析0ms，说明当前瓶颈主要在本地CPU模型推理。
 - 已完成RapidOCR候选实测：三张关键帧整体完整段落召回率82.93%、字符错误率10.64%、P95延迟4294ms，虽然明显快于当前PaddleOCR CPU批次，但仍未达到当前质量和2秒P95延迟闸门。
 - 已更新OCR后端取舍判断：RapidOCR已标记为 `evaluated_not_passed`，不接入主流程；如果继续追求生产可用OCR，下一步只能在用户授权后小样本评估服务化OCR，否则保留PaddleOCR作为当前本地基线。
-- 视频 V1 预处理已能用 OpenCV 读取元信息并等距抽取最多 5 张关键帧；这些关键帧已能分别进入 PaddleOCR 或 Qwen-VL 后端；本地 ffmpeg 可用时能抽取 wav 音频文件，但真实语音识别仍未接入，因此不能证明完整视频理解质量。
+- 视频 V1 预处理已能用 OpenCV 读取元信息并等距抽取关键帧；这些关键帧已能分别进入 PaddleOCR 或 Qwen-VL 后端；本地 ffmpeg 可用时能抽取 wav 音频文件，且可显式选择 DashScope ASR 生成真实音频转写。当前仍不能把小样本验证解释为生产级完整视频理解质量。
 - 运行时模型路由是固定规则，尚未根据预算、质量要求、延迟目标动态选择模型；路由策略预检查可以基于输入目录生成运行前规模画像，并按本批次实际媒体类型推导会触发的任务，例如无视频批次不会把语音识别纳入当前预算检查，未触发长文本切分时也不会默认纳入跨片段汇总任务。它也可以基于历史 `model_calls.jsonl` 生成任务级P95延迟画像，并优先按 `task_latency_targets_ms` 做任务级延迟闸门检查；当前受控 preflight 报告结论为 `warning` 而非 `fail`，原因是预算、真实覆盖率、OCR任务级延迟和文本分析任务级延迟通过，但视觉理解只有 mock 占位延迟证据，不能解释为真实视觉模型P95达标。该模块不会自动调整模型组合或自动执行试跑命令。
 - 多供应商成本对账已经具备通用模板、账单金额校验和报告生成能力，但当前只支持手工录入账单金额，不会自动拉取阿里、DeepSeek、豆包等平台账单；未填入 `billed_cost_cny` 前，`cost_confidence` 仍为 `unverified`。如果 `billed_cost_cny` 是非数字、负数、NaN 或 Infinity，或者同一供应商/模型/响应模型存在重叠时间窗口的重复账单记录，系统会拒绝生成对账报告。
 - 决策层报告和路由策略模拟基于已有批次数据生成，不能替代真实多供应商 live test。

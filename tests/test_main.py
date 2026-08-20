@@ -80,6 +80,7 @@ class MainTest(unittest.TestCase):
                         f"text_analysis_backend: {backend}",
                         "deepseek_api_key_env: TEST_DEEPSEEK_API_KEY",
                         "deepseek_max_tokens: 1500",
+                        "deepseek_compact_mode: false",
                         "qwen_vl_api_key_env: TEST_DASHSCOPE_API_KEY",
                         "qwen_vl_max_tokens: 500",
                         "qwen_vl_max_image_side: 960",
@@ -319,6 +320,7 @@ class MainTest(unittest.TestCase):
             settings_text = settings_path.read_text(encoding="utf-8")
             settings_path.write_text(
                 settings_text.replace("deepseek_max_tokens: 1500", "deepseek_max_tokens: 3000")
+                .replace("deepseek_compact_mode: false", "deepseek_compact_mode: true")
                 .replace("qwen_vl_max_tokens: 500", "qwen_vl_max_tokens: 700")
                 .replace("qwen_vl_max_image_side: 960", "qwen_vl_max_image_side: 480"),
                 encoding="utf-8",
@@ -357,6 +359,7 @@ class MainTest(unittest.TestCase):
                     os.environ["TEST_DASHSCOPE_API_KEY"] = original_dashscope_key
 
         self.assertEqual(mock_pipeline.call_args.kwargs["deepseek_max_tokens"], 3000)
+        self.assertTrue(mock_pipeline.call_args.kwargs["deepseek_compact_mode"])
         self.assertEqual(mock_pipeline.call_args.kwargs["qwen_vl_max_tokens"], 700)
         self.assertEqual(mock_pipeline.call_args.kwargs["qwen_vl_max_image_side"], 480)
 
@@ -507,6 +510,20 @@ class MainTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "视频关键帧数量必须大于等于 1"):
                 run_batch(settings_path=settings_path, max_keyframes=0)
+
+    def test_run_batch_rejects_invalid_deepseek_compact_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = self._write_settings(Path(tmp_dir), backend="mock")
+            settings_path.write_text(
+                settings_path.read_text(encoding="utf-8").replace(
+                    "deepseek_compact_mode: false",
+                    "deepseek_compact_mode: maybe",
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "deepseek_compact_mode"):
+                run_batch(settings_path=settings_path, batch_id="batch_invalid_bool")
 
     @patch("main.run_batch")
     def test_cli_deepseek_keeps_unselected_ocr_backend_mock(self, mock_run_batch) -> None:

@@ -76,6 +76,17 @@ def _positive_int(value: int, name: str) -> int:
     return value
 
 
+def _bool_setting(settings: dict[str, Any], key: str, default: bool) -> bool:
+    """读取布尔配置。"""
+
+    value = settings.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.lower() in {"true", "false"}:
+        return value.lower() == "true"
+    raise ValueError(f"{key} 必须是 true 或 false。")
+
+
 def _filter_records(source_records: list[dict[str, Any]], include_files: set[str]) -> list[dict[str, Any]]:
     """按文件名或文件 ID 过滤历史结果。"""
 
@@ -136,6 +147,7 @@ def reanalyze_records(
     model_prices: dict[str, dict[str, Any]],
     max_retries: int,
     max_tokens: int,
+    compact_mode: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """逐条调用 DeepSeek，只更新文件级分类、标签、摘要和业务用途。"""
 
@@ -166,6 +178,7 @@ def reanalyze_records(
                 base_url=base_url,
                 max_retries=max_retries,
                 max_tokens=max_tokens,
+                compact_mode=compact_mode,
             )
             api_usage = analysis_result.pop("_api_usage", {})
             api_attempts = analysis_result.pop("_api_attempts", [])
@@ -277,6 +290,7 @@ def main() -> None:
             int(args.deepseek_max_tokens or settings.get("deepseek_max_tokens", DEFAULT_DEEPSEEK_MAX_TOKENS)),
             "deepseek_max_tokens",
         )
+        deepseek_compact_mode = _bool_setting(settings, "deepseek_compact_mode", False)
     except ValueError as exc:
         raise SystemExit(f"错误：{exc}") from exc
 
@@ -295,6 +309,7 @@ def main() -> None:
         model_prices=model_prices,
         max_retries=args.max_api_retries,
         max_tokens=deepseek_max_tokens,
+        compact_mode=deepseek_compact_mode,
     )
 
     output_dir = _resolve_path(settings.get("output_dir", "output"))
@@ -309,6 +324,7 @@ def main() -> None:
             "reanalyze_scope": "text_analysis_only",
             "text_analysis_backend": "deepseek",
             "deepseek_max_tokens": deepseek_max_tokens,
+            "deepseek_compact_mode": deepseek_compact_mode,
             "note": "本批次复用历史 OCR 和视觉理解证据，不重新调用 OCR、Qwen-VL 或 ASR。",
         },
     )

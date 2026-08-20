@@ -526,6 +526,20 @@ class ModelClientsTest(unittest.TestCase):
         sent_payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
         self.assertEqual(sent_payload["max_tokens"], 3000)
 
+    @patch("model_clients.request.urlopen")
+    def test_deepseek_client_compact_mode_uses_compact_prompt_first(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _api_response(_analysis_content())
+
+        deepseek_text_analysis_client(
+            {"visual_description": "前几秒有效内容。" * 200},
+            api_key="test-key",
+            compact_mode=True,
+        )
+
+        sent_payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertIn("失败重试要求", sent_payload["messages"][0]["content"])
+        self.assertIn("……", sent_payload["messages"][1]["content"])
+
     def test_deepseek_client_rejects_invalid_max_tokens_before_request(self) -> None:
         with self.assertRaisesRegex(ValueError, "max_tokens"):
             deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key", max_tokens=0)

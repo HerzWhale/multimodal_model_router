@@ -16,7 +16,7 @@ H:\实习\multimodal_model_router\output\batch_20260718_150348
 |---|---|---|
 | `ai_content_sample.txt` | 文本 | 展示文本读取、DeepSeek 文本分析、分类、摘要和业务用途生成 |
 | `img.png` | 图片 | 展示图片文件进入 OCR、视觉理解和文本分析流水线；OCR 和视觉理解为 mock |
-| `例子.mp4` | 视频 | 旧批次展示视频文件进入统一流水线；历史视频 V0 批次只能抽取第一帧；当前代码已升级为视频 V1，可读取元信息并等距抽取最多 5 张关键帧，这些关键帧可交给 PaddleOCR 或 Qwen-VL；本机存在 ffmpeg 时可抽取 wav 音频文件，但真实 ASR 尚未接入 |
+| `例子.mp4` | 视频 | 旧批次展示视频文件进入统一流水线；历史视频 V0 批次只能抽取第一帧；当前代码已升级为视频 V1，可读取元信息并抽取多张关键帧，这些关键帧可交给 PaddleOCR 或 Qwen-VL；本机存在 ffmpeg 时可抽取 wav 音频文件，并可显式选择 DashScope ASR |
 
 字段说明：
 
@@ -49,8 +49,8 @@ python .\src\main.py --input-dir .\input\sample_videos --include-files 例子.mp
 - `keyframe_paths` 记录已写出的5张等距关键帧路径，说明视频画面证据覆盖了开头、中段和结尾附近的多个时间点；
 - `keyframe_metadata` 记录每张关键帧的源帧号和估算时间位置，例如0ms、75400ms、150767ms、226133ms和301533ms；
 - `model_calls.jsonl` 中有5次mock OCR、5次mock视觉理解、1次预期语音识别失败和1次mock文本分析；该历史批次生成于本地音频提取最小闭环之前；
-- 当前代码如果本机存在 ffmpeg，会尝试生成 wav 音频文件并进入 mock 语音识别分支；如果缺少 ffmpeg，会把 `audio_extraction_status` 记录为 `dependency_missing`，并继续把 `audio_transcript` 作为缺失证据；
-- 该批次不能解释为真实视频OCR质量、真实视频视觉理解质量或真实ASR质量。
+- 当前代码如果本机存在 ffmpeg，会尝试生成 wav 音频文件；默认进入 mock 语音识别分支，显式选择 `dashscope_asr` 并授权后才会调用真实 ASR；
+- 该历史 mock 批次不能解释为真实视频 OCR 质量、真实视频视觉理解质量或真实 ASR 质量。
 
 历史视频 V0 受控批次：
 
@@ -166,6 +166,7 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 | `vision_understanding_backend` | 图片或视频关键帧视觉理解后端配置，用来决定使用 mock 还是 Qwen-VL |
 | `--max-api-retries` | 可重试错误的最大重试次数；默认0，显式设为1才允许一次重试；当前适用于 DeepSeek 和 Qwen-VL |
 | `--allow-live-api` | 真实 API 调用授权开关，用来防止误触发外部调用和费用 |
+| `deepseek_compact_mode` | DeepSeek 文本分析短输出模式开关，用于减少首发请求证据和输出负担，降低文本分析延迟风险 |
 | `text_analysis_evidence_char_limit` | 文本分析输入证据字符上限，用于减少长视频证据直接塞入文本分析模型造成的延迟风险；原始证据仍保留在结果文件中 |
 | `qwen_vl_max_image_side` | Qwen-VL 请求图片副本最长边上限，用来减少图片请求体积和视觉理解延迟风险；原图不被修改 |
 
@@ -637,7 +638,7 @@ output/batch_failure_demo_20260721_190052
 | 视频 OCR | 默认 mock / 可选本地 PaddleOCR | 当前代码可把视频 V1 抽出的最多 5 张关键帧交给 PaddleOCR；历史视频 V0 批次仍是 mock 单帧证据，尚未形成视频关键帧真实质量评估 |
 | 图片视觉理解 | 默认 mock / 可选 Qwen-VL API | 默认返回模拟视觉描述；显式选择 `qwen_vl` 且授权后才会调用 Qwen-VL，当前已有 `img_1.png` 单图真实验证，但尚未形成多图质量评估 |
 | 视频视觉理解 | 默认 mock / 可选 Qwen-VL API | 当前代码可把视频 V1 抽出的最多 5 张关键帧交给 Qwen-VL；需要 `--allow-live-api`；支持关键帧级受控重试；已有一次真实试跑但仍需复测可靠性 |
-| 语音识别 | mock | 本地音频文件存在时返回模拟音频转写，不是真实音频识别 |
+| 语音识别 | 默认 mock / 可选 DashScope ASR | 本地音频文件存在时，默认返回模拟音频转写；显式选择 `dashscope_asr`、提供 API Key 并授权后才会调用真实 ASR |
 | 视频预处理 | 已实现 V1 | 可读取视频元信息并等距抽取最多 5 张关键帧；本机有 ffmpeg 时可抽取 wav 音频，缺少依赖或提取失败时会记录明确状态 |
 | 多供应商动态路由 | 未实现 | 目前按任务类型固定路由，不按成本、延迟或质量动态选择 |
 ## 成本字段读取口径补充
@@ -684,6 +685,6 @@ output/batch_failure_demo_20260721_190052
 | `batch_report.json` | 本轮 DeepSeek 文本分析的成本、延迟和成功率汇总 |
 | `errors.jsonl` | 本轮失败记录；无失败时为空 |
 
-字段说明：`batch_id` 是新重分析批次编号；`source_batch_id` 是被复用的历史批次编号；`topic` 是主分类；`secondary_topics` 是副分类；`evidence_used` 是实际用于文本分析的证据列表；`missing_evidence` 是缺失证据列表；`processing_status` 是文件级处理状态。由于真实 ASR 尚未接入，视频重分析结果即使 DeepSeek 成功，也可能保持 `partial_success`，表示结果基于 OCR 和视觉理解证据，但缺少真实音频证据。
+字段说明：`batch_id` 是新重分析批次编号；`source_batch_id` 是被复用的历史批次编号；`topic` 是主分类；`secondary_topics` 是副分类；`evidence_used` 是实际用于文本分析的证据列表；`missing_evidence` 是缺失证据列表；`processing_status` 是文件级处理状态。未显式选择真实 ASR 或 ASR 调用失败时，视频重分析结果即使 DeepSeek 成功，也可能保持 `partial_success`，表示结果基于 OCR 和视觉理解证据，但缺少真实音频证据。
 
 如果启用 `--max-api-retries 1` 后发生第一次失败、第二次成功，`model_calls.jsonl` 会保留两条调用记录，`call_ids` 也会同时关联两次尝试，便于追踪重试成本和延迟。

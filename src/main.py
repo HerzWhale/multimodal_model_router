@@ -98,6 +98,17 @@ def _positive_int_setting(settings: dict[str, Any], key: str, default: int) -> i
     return value
 
 
+def _bool_setting(settings: dict[str, Any], key: str, default: bool) -> bool:
+    """读取布尔配置，拒绝容易误读的字符串。"""
+
+    value = settings.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.lower() in {"true", "false"}:
+        return value.lower() == "true"
+    raise ValueError(f"{key} 必须是 true 或 false。")
+
+
 def _filter_manifest_by_file_names(
     file_manifest: list[dict[str, Any]],
     include_file_names: list[str] | None,
@@ -297,6 +308,7 @@ def run_batch(
     speech_to_text_backend = speech_to_text_backend_override or settings.get("speech_to_text_backend", "mock")
     text_analysis_backend = text_analysis_backend_override or settings.get("text_analysis_backend", "mock")
     deepseek_max_tokens = _positive_int_setting(settings, "deepseek_max_tokens", DEFAULT_DEEPSEEK_MAX_TOKENS)
+    deepseek_compact_mode = _bool_setting(settings, "deepseek_compact_mode", False)
     text_analysis_evidence_char_limit = _positive_int_setting(
         settings,
         "text_analysis_evidence_char_limit",
@@ -382,6 +394,7 @@ def run_batch(
             deepseek_model_name=settings.get("deepseek_model_name", "deepseek-v4-flash"),
             deepseek_max_retries=deepseek_max_retries,
             deepseek_max_tokens=deepseek_max_tokens,
+            deepseek_compact_mode=deepseek_compact_mode,
             text_analysis_evidence_char_limit=text_analysis_evidence_char_limit,
             qwen_vl_api_key=qwen_vl_api_key,
             qwen_vl_base_url=settings.get(
@@ -420,6 +433,7 @@ def run_batch(
         "allow_partial_success": settings["allow_partial_success"],
         "target_output_format": settings["target_output_format"],
         "video_max_keyframes": effective_max_keyframes,
+        "deepseek_compact_mode": deepseek_compact_mode,
         "text_analysis_evidence_char_limit": text_analysis_evidence_char_limit,
         "qwen_vl_max_image_side": qwen_vl_max_image_side,
         "selected_backends": {

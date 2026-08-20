@@ -432,6 +432,7 @@ def run_file_pipeline(
     deepseek_model_name: str = "deepseek-v4-flash",
     deepseek_max_retries: int = 0,
     deepseek_max_tokens: int = DEFAULT_DEEPSEEK_MAX_TOKENS,
+    deepseek_compact_mode: bool = False,
     text_analysis_evidence_char_limit: int | None = None,
     qwen_vl_api_key: str | None = None,
     qwen_vl_base_url: str = DEFAULT_QWEN_VL_BASE_URL,
@@ -1119,6 +1120,7 @@ def run_file_pipeline(
                 base_url=deepseek_base_url,
                 max_retries=deepseek_max_retries,
                 max_tokens=deepseek_max_tokens,
+                compact_mode=deepseek_compact_mode,
             )
             api_usage = analysis_result.pop("_api_usage", {})
             api_attempts = analysis_result.pop("_api_attempts", [])
