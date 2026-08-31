@@ -414,6 +414,84 @@ class TextTopicEvaluatorTest(unittest.TestCase):
         self.assertIn("证据稳定性", markdown)
         self.assertIn("video_evidence_weak", markdown)
         self.assertEqual(saved_report["details"][0]["video_evidence_stability"], "weak")
+        self.assertEqual(saved_report["details"][0]["result_quality_gate_status"], "warning")
+        self.assertTrue(saved_report["details"][0]["requires_human_review"])
+
+    def test_video_quality_gate_summarizes_pass_warning_and_fail(self) -> None:
+        report = evaluate_topic_metrics(
+            [
+                {
+                    "file_id": "file_pass",
+                    "file_name": "例子.mp4",
+                    "predicted_topic": "other",
+                    "predicted_secondary_topics": "",
+                    "gold_topic": "other",
+                    "gold_secondary_topics": "",
+                    "processing_status": "success",
+                    "quality_flags": "",
+                    "video_evidence_stability": "stable",
+                    "video_evidence_risk_reasons": "",
+                },
+                {
+                    "file_id": "file_warning",
+                    "file_name": "例子1.mp4",
+                    "predicted_topic": "humor",
+                    "predicted_secondary_topics": "lifestyle",
+                    "gold_topic": "humor",
+                    "gold_secondary_topics": "lifestyle",
+                    "processing_status": "success",
+                    "quality_flags": "video_evidence_weak",
+                    "video_evidence_stability": "weak",
+                    "video_evidence_risk_reasons": "关键帧数量不足",
+                },
+                {
+                    "file_id": "file_fail",
+                    "file_name": "例子2.mp4",
+                    "predicted_topic": "technology",
+                    "predicted_secondary_topics": "gaming",
+                    "gold_topic": "technology",
+                    "gold_secondary_topics": "",
+                    "processing_status": "success",
+                    "quality_flags": "",
+                    "video_evidence_stability": "stable",
+                    "video_evidence_risk_reasons": "",
+                },
+            ]
+        )
+
+        self.assertEqual(
+            report["quality_gate_summary"],
+            {
+                "pass_count": 1,
+                "warning_count": 1,
+                "fail_count": 1,
+                "requires_human_review_count": 2,
+            },
+        )
+        details = {item["file_id"]: item for item in report["details"]}
+        self.assertEqual(details["file_pass"]["result_quality_gate_status"], "pass")
+        self.assertEqual(details["file_warning"]["result_quality_gate_status"], "warning")
+        self.assertEqual(details["file_fail"]["result_quality_gate_status"], "fail")
+
+    def test_video_evaluation_markdown_uses_eleven_class_wording(self) -> None:
+        report = evaluate_topic_metrics(
+            [
+                {
+                    "file_id": "file_001",
+                    "file_name": "例子2.mp4",
+                    "predicted_topic": "invalid",
+                    "gold_topic": "technology",
+                    "processing_status": "success",
+                    "quality_flags": "",
+                    "video_evidence_stability": "stable",
+                    "video_evidence_risk_reasons": "",
+                }
+            ]
+        )
+        markdown = render_evaluation_markdown(report, media_type="video")
+
+        self.assertIn("11类允许值", markdown)
+        self.assertNotIn("九类允许值", markdown)
 
     def test_render_missing_label_report(self) -> None:
         report = evaluate_topic_metrics(

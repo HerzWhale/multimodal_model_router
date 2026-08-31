@@ -18,6 +18,8 @@ from model_clients import (
     DEFAULT_DASHSCOPE_ASR_MODEL_NAME,
     DEFAULT_DASHSCOPE_ASR_SUBMIT_URL,
     DEFAULT_PADDLEOCR_MODEL_NAME,
+    DEFAULT_QWEN_OCR_MAX_TOKENS,
+    DEFAULT_QWEN_OCR_MODEL_NAME,
     DEFAULT_QWEN_VL_BASE_URL,
     DEFAULT_QWEN_VL_MAX_IMAGE_SIDE,
     DEFAULT_QWEN_VL_MAX_TOKENS,
@@ -32,9 +34,10 @@ from model_clients import (
     mock_text_analysis_client,
     mock_vision_client,
     paddleocr_client,
+    qwen_ocr_client,
     qwen_vl_image_understanding_client,
 )
-from model_router import select_model
+from model_router import route_plan_backends_for_media, routing_rules_for_media, select_model
 from preprocessor import preprocess_file
 from runtime_config import runtime_policy_list, runtime_policy_section
 
@@ -54,6 +57,7 @@ STATUS_AFFECTING_QUALITY_FLAGS = {
     VIDEO_EVIDENCE_WEAK_FLAG,
 }
 OCR_QUALITY_GATE = runtime_policy_section("ocr_quality_gate")
+TEXT_ANALYSIS_EXECUTION_POLICY = runtime_policy_section("text_analysis_execution")
 ALLOWED_OCR_BACKENDS = runtime_policy_list("runtime_backends", "ocr")
 ALLOWED_VISION_BACKENDS = runtime_policy_list("runtime_backends", "vision_understanding")
 ALLOWED_SPEECH_BACKENDS = runtime_policy_list("runtime_backends", "speech_to_text")
@@ -62,6 +66,14 @@ LOW_QUALITY_OCR_MAX_VISIBLE_CHARS = int(OCR_QUALITY_GATE.get("max_visible_chars"
 LOW_QUALITY_OCR_MIN_SHORT_LINE_RATIO = float(OCR_QUALITY_GATE.get("min_short_line_ratio", 0.7))
 LOW_QUALITY_OCR_MIN_SINGLE_CHAR_LINE_RATIO = float(OCR_QUALITY_GATE.get("min_single_char_line_ratio", 0.25))
 LOW_QUALITY_OCR_MIN_ASCII_NOISE_LINE_RATIO = float(OCR_QUALITY_GATE.get("min_ascii_noise_line_ratio", 0.4))
+LOW_QUALITY_OCR_MIN_ASCII_FRAGMENT_LINES = int(OCR_QUALITY_GATE.get("min_ascii_fragment_lines", 30))
+LOW_QUALITY_OCR_MIN_ASCII_FRAGMENT_RATIO = float(OCR_QUALITY_GATE.get("min_ascii_fragment_ratio", 0.6))
+DEFERRED_TEXT_STATUS = str(TEXT_ANALYSIS_EXECUTION_POLICY["deferred_processing_status"])
+DEFERRED_TEXT_QUALITY_FLAG = str(TEXT_ANALYSIS_EXECUTION_POLICY["deferred_quality_flag"])
+DEFERRED_TEXT_WARNING = str(TEXT_ANALYSIS_EXECUTION_POLICY["deferred_warning"])
+NO_EVIDENCE_STATUS = str(TEXT_ANALYSIS_EXECUTION_POLICY["no_evidence_processing_status"])
+NO_EVIDENCE_QUALITY_FLAG = str(TEXT_ANALYSIS_EXECUTION_POLICY["no_evidence_quality_flag"])
+NO_EVIDENCE_ERROR = str(TEXT_ANALYSIS_EXECUTION_POLICY["no_evidence_error"])
 
 
 def _now_iso() -> str:
@@ -148,6 +160,18 @@ def _is_low_quality_ocr_text(ocr_text: str | None) -> bool:
     short_line_ratio = short_lines / len(lines)
     single_char_line_ratio = single_char_lines / len(lines)
     ascii_noise_line_ratio = ascii_noise_lines / len(lines)
+    ascii_fragment_lines = sum(
+        1
+        for line in lines
+        if _visible_text_length(line) <= 3 and all(char.isascii() for char in line if not char.isspace())
+    )
+    ascii_fragment_ratio = ascii_fragment_lines / len(lines)
+
+    if (
+        ascii_fragment_lines >= LOW_QUALITY_OCR_MIN_ASCII_FRAGMENT_LINES
+        and ascii_fragment_ratio >= LOW_QUALITY_OCR_MIN_ASCII_FRAGMENT_RATIO
+    ):
+        return True
 
     return (
         len(lines) >= LOW_QUALITY_OCR_MIN_LINES
@@ -336,6 +360,49 @@ def _vision_output_units(api_usage: dict[str, int], visual_description: str | No
     return _output_tokens(visual_description)
 
 
+def _ocr_input_units(ocr_backend: str, api_usage: dict[str, int]) -> list[dict[str, Any]]:
+    """云 OCR 使用真实输入 token，本地与 mock 继续按图片数计量。"""
+
+    if ocr_backend == "qwen_ocr":
+        return [{"unit_type": "input_tokens", "quantity": int(api_usage.get("prompt_tokens") or 0)}]
+    return [{"unit_type": "image_count", "quantity": 1}]
+
+
+def _ocr_output_units(ocr_backend: str, api_usage: dict[str, int], ocr_text: str | None) -> list[dict[str, Any]]:
+    """云 OCR 使用真实输出 token，本地与 mock 继续按文字长度计量。"""
+
+    if ocr_backend == "qwen_ocr":
+        return [{"unit_type": "output_tokens", "quantity": int(api_usage.get("completion_tokens") or 0)}]
+    return _output_text_chars(ocr_text or "")
+
+
+def _run_ocr_backend(
+    image_path: str | Path,
+    ocr_backend: str,
+    *,
+    qwen_ocr_api_key: str | None,
+    qwen_ocr_base_url: str,
+    qwen_ocr_model_name: str,
+    qwen_ocr_max_tokens: int,
+    qwen_ocr_max_image_side: int | None,
+) -> tuple[dict[str, Any], dict[str, int], str | None]:
+    """让图片和视频关键帧共用同一 OCR 后端选择。"""
+
+    if ocr_backend == "paddleocr":
+        return paddleocr_client(image_path), {}, None
+    if ocr_backend == "qwen_ocr":
+        result = qwen_ocr_client(
+            image_path,
+            api_key=qwen_ocr_api_key,
+            base_url=qwen_ocr_base_url,
+            model_name=qwen_ocr_model_name,
+            max_tokens=qwen_ocr_max_tokens,
+            max_image_side=qwen_ocr_max_image_side,
+        )
+        return result, result.pop("_api_usage", {}), result.pop("_response_model_name", None)
+    return mock_ocr_client(image_path), {}, None
+
+
 def _build_qwen_vl_attempt_call(
     *,
     attempt: dict[str, Any],
@@ -423,10 +490,12 @@ def run_file_pipeline(
     routing_rules: dict[str, dict[str, str]],
     model_prices: dict[str, dict[str, Any]],
     *,
+    route_plan: dict[str, Any] | None = None,
     ocr_backend: str = "mock",
     vision_understanding_backend: str = "mock",
     speech_to_text_backend: str = "mock",
     text_analysis_backend: str = "mock",
+    defer_text_analysis: bool = False,
     deepseek_api_key: str | None = None,
     deepseek_base_url: str = DEFAULT_DEEPSEEK_BASE_URL,
     deepseek_model_name: str = "deepseek-v4-flash",
@@ -434,6 +503,11 @@ def run_file_pipeline(
     deepseek_max_tokens: int = DEFAULT_DEEPSEEK_MAX_TOKENS,
     deepseek_compact_mode: bool = False,
     text_analysis_evidence_char_limit: int | None = None,
+    qwen_ocr_api_key: str | None = None,
+    qwen_ocr_base_url: str = DEFAULT_QWEN_VL_BASE_URL,
+    qwen_ocr_model_name: str = DEFAULT_QWEN_OCR_MODEL_NAME,
+    qwen_ocr_max_tokens: int = DEFAULT_QWEN_OCR_MAX_TOKENS,
+    qwen_ocr_max_image_side: int | None = None,
     qwen_vl_api_key: str | None = None,
     qwen_vl_base_url: str = DEFAULT_QWEN_VL_BASE_URL,
     qwen_vl_model_name: str = DEFAULT_QWEN_VL_MODEL_NAME,
@@ -451,6 +525,15 @@ def run_file_pipeline(
 ) -> dict[str, Any]:
     """运行单个文件处理流水线；图片和视频关键帧可按配置选择真实上游后端。"""
 
+    media_type = str(file_record["media_type"])
+    if route_plan is not None:
+        planned_backends = route_plan_backends_for_media(route_plan, media_type)
+        routing_rules = routing_rules_for_media(route_plan, media_type)
+        ocr_backend = planned_backends["ocr_backend"]
+        vision_understanding_backend = planned_backends["vision_understanding_backend"]
+        speech_to_text_backend = planned_backends["speech_to_text_backend"]
+        text_analysis_backend = planned_backends["text_analysis_backend"]
+
     if ocr_backend not in ALLOWED_OCR_BACKENDS:
         raise ValueError(f"不支持的 OCR 后端: {ocr_backend}")
     if vision_understanding_backend not in ALLOWED_VISION_BACKENDS:
@@ -467,7 +550,6 @@ def run_file_pipeline(
         ffmpeg_path=ffmpeg_path,
         **({"max_keyframes": max_keyframes} if max_keyframes is not None else {}),
     )
-    media_type = file_record["media_type"]
     model_calls: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     recovered_errors: list[dict[str, Any]] = []
@@ -534,24 +616,33 @@ def run_file_pipeline(
 
     elif media_type == "image":
         image_path = preprocessed["image_path"]
-        ocr_provider = "paddlepaddle" if ocr_backend == "paddleocr" else None
-        ocr_model_name = DEFAULT_PADDLEOCR_MODEL_NAME if ocr_backend == "paddleocr" else None
+        ocr_provider = "paddlepaddle" if ocr_backend == "paddleocr" else "qwen" if ocr_backend == "qwen_ocr" else None
+        ocr_model_name = (
+            DEFAULT_PADDLEOCR_MODEL_NAME if ocr_backend == "paddleocr" else qwen_ocr_model_name if ocr_backend == "qwen_ocr" else None
+        )
         ocr_started_at = perf_counter()
+        ocr_api_usage: dict[str, int] = {}
+        ocr_response_model_name: str | None = None
         try:
             if "ocr" in injected_failures:
                 raise RuntimeError(injected_failures["ocr"])
-            if ocr_backend == "paddleocr":
-                ocr_result = paddleocr_client(image_path)
-            else:
-                ocr_result = mock_ocr_client(image_path)
+            ocr_result, ocr_api_usage, ocr_response_model_name = _run_ocr_backend(
+                image_path,
+                ocr_backend,
+                qwen_ocr_api_key=qwen_ocr_api_key,
+                qwen_ocr_base_url=qwen_ocr_base_url,
+                qwen_ocr_model_name=qwen_ocr_model_name,
+                qwen_ocr_max_tokens=qwen_ocr_max_tokens,
+                qwen_ocr_max_image_side=qwen_ocr_max_image_side,
+            )
         except Exception as exc:
             record_upstream_failure(
                 task_type="ocr",
                 missing_field="ocr_text",
                 quality_flag="ocr_failed",
                 warning_message="OCR 分支失败，最终分析未使用图片文字证据。",
-                input_units=[{"unit_type": "image_count", "quantity": 1}],
-                output_units=_output_text_chars(""),
+                input_units=_ocr_input_units(ocr_backend, ocr_api_usage),
+                output_units=_ocr_output_units(ocr_backend, ocr_api_usage, None),
                 error_message=str(exc),
                 latency_ms=int(round((perf_counter() - ocr_started_at) * 1000)),
                 provider=ocr_provider,
@@ -560,7 +651,7 @@ def run_file_pipeline(
         else:
             evidence.update(ocr_result)
             if ocr_result["ocr_text"]:
-                if ocr_backend == "paddleocr" and _is_low_quality_ocr_text(ocr_result["ocr_text"]):
+                if ocr_backend != "mock" and _is_low_quality_ocr_text(ocr_result["ocr_text"]):
                     quality_flags.append(LOW_QUALITY_OCR_FLAG)
                     warning_messages.append(LOW_QUALITY_OCR_WARNING)
                 else:
@@ -570,13 +661,14 @@ def run_file_pipeline(
                     call_index=len(model_calls) + 1,
                     file_record=file_record,
                     task_type="ocr",
-                    input_units=[{"unit_type": "image_count", "quantity": 1}],
-                    output_units=_output_text_chars(ocr_result["ocr_text"] or ""),
+                    input_units=_ocr_input_units(ocr_backend, ocr_api_usage),
+                    output_units=_ocr_output_units(ocr_backend, ocr_api_usage, ocr_result["ocr_text"]),
                     routing_rules=routing_rules,
                     model_prices=model_prices,
                     latency_ms=int(round((perf_counter() - ocr_started_at) * 1000)),
                     provider=ocr_provider,
                     model_name=ocr_model_name,
+                    response_model_name=ocr_response_model_name,
                 )
             )
 
@@ -724,8 +816,10 @@ def run_file_pipeline(
             if VIDEO_EVIDENCE_WEAK_FLAG not in quality_flags:
                 quality_flags.append(VIDEO_EVIDENCE_WEAK_FLAG)
 
-        ocr_provider = "paddlepaddle" if ocr_backend == "paddleocr" else None
-        ocr_model_name = DEFAULT_PADDLEOCR_MODEL_NAME if ocr_backend == "paddleocr" else None
+        ocr_provider = "paddlepaddle" if ocr_backend == "paddleocr" else "qwen" if ocr_backend == "qwen_ocr" else None
+        ocr_model_name = (
+            DEFAULT_PADDLEOCR_MODEL_NAME if ocr_backend == "paddleocr" else qwen_ocr_model_name if ocr_backend == "qwen_ocr" else None
+        )
         if "ocr" in injected_failures:
             record_upstream_failure(
                 task_type="ocr",
@@ -755,18 +849,25 @@ def run_file_pipeline(
             low_quality_keyframes = 0
             for keyframe_index, keyframe_path in enumerate(keyframe_paths, start=1):
                 ocr_started_at = perf_counter()
+                ocr_api_usage: dict[str, int] = {}
+                ocr_response_model_name: str | None = None
                 try:
-                    if ocr_backend == "paddleocr":
-                        ocr_result = paddleocr_client(keyframe_path)
-                    else:
-                        ocr_result = mock_ocr_client(keyframe_path)
+                    ocr_result, ocr_api_usage, ocr_response_model_name = _run_ocr_backend(
+                        keyframe_path,
+                        ocr_backend,
+                        qwen_ocr_api_key=qwen_ocr_api_key,
+                        qwen_ocr_base_url=qwen_ocr_base_url,
+                        qwen_ocr_model_name=qwen_ocr_model_name,
+                        qwen_ocr_max_tokens=qwen_ocr_max_tokens,
+                        qwen_ocr_max_image_side=qwen_ocr_max_image_side,
+                    )
                 except Exception as exc:
                     failed_call = _build_failed_call(
                         call_index=len(model_calls) + 1,
                         file_record=file_record,
                         task_type="ocr",
-                        input_units=[{"unit_type": "image_count", "quantity": 1}],
-                        output_units=_output_text_chars(""),
+                        input_units=_ocr_input_units(ocr_backend, ocr_api_usage),
+                        output_units=_ocr_output_units(ocr_backend, ocr_api_usage, None),
                         routing_rules=routing_rules,
                         model_prices=model_prices,
                         error_message=str(exc),
@@ -794,7 +895,7 @@ def run_file_pipeline(
                 if ocr_text:
                     frame_text = f"[关键帧 {keyframe_index}] {ocr_text}"
                     raw_ocr_texts.append(frame_text)
-                    if ocr_backend == "paddleocr" and _is_low_quality_ocr_text(ocr_text):
+                    if ocr_backend != "mock" and _is_low_quality_ocr_text(ocr_text):
                         low_quality_keyframes += 1
                     else:
                         usable_ocr_texts.append(frame_text)
@@ -803,13 +904,14 @@ def run_file_pipeline(
                         call_index=len(model_calls) + 1,
                         file_record=file_record,
                         task_type="ocr",
-                        input_units=[{"unit_type": "image_count", "quantity": 1}],
-                        output_units=_output_text_chars(ocr_text or ""),
+                        input_units=_ocr_input_units(ocr_backend, ocr_api_usage),
+                        output_units=_ocr_output_units(ocr_backend, ocr_api_usage, ocr_text),
                         routing_rules=routing_rules,
                         model_prices=model_prices,
                         latency_ms=int(round((perf_counter() - ocr_started_at) * 1000)),
                         provider=ocr_provider,
                         model_name=ocr_model_name,
+                        response_model_name=ocr_response_model_name,
                     )
                 )
 
@@ -1087,6 +1189,56 @@ def run_file_pipeline(
 
     else:
         raise ValueError(f"不支持的文件类型: {media_type}")
+
+    if defer_text_analysis:
+        has_usable_evidence = any(
+            isinstance(value, str) and bool(value.strip())
+            for value in evidence.values()
+        )
+        deferred_quality_flags = list(
+            dict.fromkeys([*quality_flags, DEFERRED_TEXT_QUALITY_FLAG if has_usable_evidence else NO_EVIDENCE_QUALITY_FLAG])
+        )
+        deferred_warnings = list(
+            dict.fromkeys([*warning_messages, DEFERRED_TEXT_WARNING if has_usable_evidence else NO_EVIDENCE_ERROR])
+        )
+        result = {
+            "schema_version": "v1",
+            "batch_id": file_record["batch_id"],
+            "file_id": file_record["file_id"],
+            "file_name": file_record["file_name"],
+            "media_type": media_type,
+            "source_path": file_record["source_path"],
+            "file_size_bytes": file_record["file_size_bytes"],
+            "duration_ms": preprocessed.get("duration_ms"),
+            "preprocessing_artifacts": preprocessed.get("preprocessing_artifacts"),
+            "language": "unknown",
+            "created_at": file_record["created_at"],
+            "processed_at": _now_iso(),
+            "raw_text": evidence["raw_text"],
+            "ocr_text": evidence["ocr_text"],
+            "audio_transcript": evidence["audio_transcript"],
+            "visual_description": evidence["visual_description"],
+            "topic": None,
+            "secondary_topics": [],
+            "tags": [],
+            "summary": None,
+            "business_use": None,
+            "processing_status": DEFERRED_TEXT_STATUS if has_usable_evidence else NO_EVIDENCE_STATUS,
+            "evidence_used": evidence_used,
+            "missing_evidence": missing_evidence,
+            "quality_flags": deferred_quality_flags,
+            "warning_messages": deferred_warnings,
+            "error_message": (
+                "；".join(str(error["error_message"]) for error in errors)
+                if errors
+                else None if has_usable_evidence else NO_EVIDENCE_ERROR
+            ),
+            "call_ids": [call["call_id"] for call in model_calls],
+            "models_used": _models_used_from_calls(model_calls),
+            "processing_cost_cny": round(sum(float(call["cost_cny"]) for call in model_calls), 6),
+            "processing_time_ms": int(round((perf_counter() - pipeline_started_at) * 1000)),
+        }
+        return {"result": result, "model_calls": model_calls, "errors": errors}
 
     analysis_evidence = dict(evidence)
     if LOW_QUALITY_OCR_FLAG in quality_flags:

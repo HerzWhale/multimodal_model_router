@@ -28,12 +28,16 @@ DEEPSEEK_PROMPT_POLICY = runtime_policy_section("deepseek_prompt")
 
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_PADDLEOCR_MODEL_NAME = "PP-OCRv5_mobile"
+DEFAULT_QWEN_OCR_MODEL_NAME = "qwen3.5-ocr"
 DEFAULT_QWEN_VL_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_QWEN_VL_MODEL_NAME = "qwen-vl-plus"
+DEFAULT_QWEN_TEXT_MODEL_NAME = "qwen-plus-2025-12-01"
 DEFAULT_DASHSCOPE_ASR_MODEL_NAME = "paraformer-v2"
 DEFAULT_DASHSCOPE_ASR_SUBMIT_URL = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
 DEFAULT_DEEPSEEK_MAX_TOKENS = 2500
 DEFAULT_QWEN_VL_MAX_TOKENS = 500
+DEFAULT_QWEN_OCR_MAX_TOKENS = 4096
+DEFAULT_QWEN_TEXT_MAX_TOKENS = 1600
 DEFAULT_QWEN_VL_MAX_IMAGE_SIDE = 960
 DEEPSEEK_CONTENT_PREVIEW_CHARS = 120
 DEEPSEEK_COMPACT_EVIDENCE_CHARS = 500
@@ -124,6 +128,18 @@ class DeepSeekAttemptsExhausted(RuntimeError):
         self.attempts = attempts
 
 
+class QwenTextResponseError(DeepSeekResponseError):
+    """表示一次 Qwen 文本分析请求产生了可识别的响应错误。"""
+
+
+class QwenTextAttemptsExhausted(RuntimeError):
+    """表示 Qwen 文本分析调用未成功，并保留每次尝试的计量信息。"""
+
+    def __init__(self, last_error: QwenTextResponseError, attempts: list[dict[str, Any]]) -> None:
+        super().__init__(str(last_error))
+        self.attempts = attempts
+
+
 class PaddleOCRResponseError(RuntimeError):
     """表示 PaddleOCR 推理失败或返回结构不符合预期。"""
 
@@ -145,6 +161,10 @@ class QwenVLResponseError(RuntimeError):
         self.retryable = retryable
         self.api_usage = api_usage or {}
         self.response_model_name = response_model_name
+
+
+class QwenOCRResponseError(QwenVLResponseError):
+    """表示一次 Qwen3.5-OCR 请求产生了可识别的响应错误。"""
 
 
 class QwenVLAttemptsExhausted(RuntimeError):
@@ -528,6 +548,119 @@ def mock_vision_client(image_path: str | Path) -> dict[str, str]:
     return {"visual_description": f"模拟视觉描述：{file_name} 展示了一段待分析内容。"}
 
 
+def qwen_ocr_client(
+    image_path: str | Path,
+    *,
+    api_key: str | None,
+    model_name: str = DEFAULT_QWEN_OCR_MODEL_NAME,
+    base_url: str = DEFAULT_QWEN_VL_BASE_URL,
+    timeout_seconds: int = 60,
+    max_tokens: int = DEFAULT_QWEN_OCR_MAX_TOKENS,
+    max_image_side: int | None = None,
+) -> dict[str, Any]:
+    """调用 Qwen3.5-OCR；默认发送原图，可选限制最长边。"""
+
+    if not api_key:
+        raise ValueError("缺少 DASHSCOPE_API_KEY，无法调用 Qwen3.5-OCR API。")
+    max_tokens = _require_positive_int(max_tokens, "Qwen3.5-OCR max_tokens")
+    if max_image_side is not None:
+        max_image_side = _require_positive_int(max_image_side, "Qwen3.5-OCR max_image_side")
+    path = Path(image_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"OCR 输入图片不存在：{path}")
+    if path.stat().st_size == 0:
+        raise ValueError("OCR 输入图片为空。")
+
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": _image_to_data_url(path, max_image_side=max_image_side)}},
+                    {"type": "text", "text": "识别图片中的全部可见文字，按自然阅读顺序输出纯文本，不要解释。"},
+                ],
+            }
+        ],
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    api_request = request.Request(
+        f"{base_url.rstrip('/')}/chat/completions",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    result, api_usage, response_model_name = _perform_qwen_ocr_request(api_request, timeout_seconds)
+    result["_api_usage"] = api_usage
+    result["_response_model_name"] = response_model_name
+    return result
+
+
+def _perform_qwen_ocr_request(
+    api_request: request.Request,
+    timeout_seconds: int,
+) -> tuple[dict[str, str], dict[str, int], str | None]:
+    """执行并校验一次 OpenAI 兼容的 Qwen OCR 响应。"""
+
+    try:
+        with request.urlopen(api_request, timeout=timeout_seconds) as response:
+            response_bytes = response.read()
+    except error.HTTPError as exc:
+        detail_bytes = exc.read()
+        raise QwenOCRResponseError(
+            "qwen_ocr_http_error",
+            f"Qwen3.5-OCR API 返回 HTTP {exc.code}，响应体长度 {len(detail_bytes)} 字节。",
+            retryable=exc.code == 429 or exc.code >= 500,
+        ) from exc
+    except error.URLError as exc:
+        raise QwenOCRResponseError(
+            "qwen_ocr_network_error", f"Qwen3.5-OCR API 网络连接失败：{exc.reason}", retryable=True
+        ) from exc
+    except (http_client.RemoteDisconnected, ConnectionResetError, ConnectionAbortedError, TimeoutError) as exc:
+        raise QwenOCRResponseError(
+            "qwen_ocr_network_interrupted", f"Qwen3.5-OCR API 网络连接中断：{exc}", retryable=True
+        ) from exc
+
+    try:
+        response_data = json.loads(response_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise QwenOCRResponseError(
+            "qwen_ocr_response_invalid_json", "Qwen3.5-OCR API 响应不是合法 UTF-8 JSON。", retryable=True
+        ) from exc
+    if not isinstance(response_data, dict):
+        raise QwenOCRResponseError(
+            "qwen_ocr_response_invalid_schema", "Qwen3.5-OCR API 外层响应必须是 JSON 对象。", retryable=True
+        )
+    api_usage = _extract_api_usage(response_data)
+    response_model_name = str(response_data.get("model") or "").strip() or None
+    try:
+        content = response_data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise QwenOCRResponseError(
+            "qwen_ocr_response_missing_content",
+            "Qwen3.5-OCR API 响应缺少 choices[0].message.content。",
+            retryable=True,
+            api_usage=api_usage,
+            response_model_name=response_model_name,
+        ) from exc
+    if isinstance(content, list):
+        content = "\n".join(
+            str(item.get("text"))
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
+        )
+    if not isinstance(content, str) or not content.strip():
+        raise QwenOCRResponseError(
+            "qwen_ocr_content_empty",
+            "Qwen3.5-OCR 模型内容为空。",
+            retryable=True,
+            api_usage=api_usage,
+            response_model_name=response_model_name,
+        )
+    return {"ocr_text": content.strip()}, api_usage, response_model_name
+
+
 def qwen_vl_image_understanding_client(
     image_path: str | Path,
     *,
@@ -884,7 +1017,7 @@ def deepseek_text_analysis_client(
             method="POST",
         )
         try:
-            result, api_usage = _perform_deepseek_request(
+            result, api_usage, response_model_name = _perform_deepseek_request(
                 api_request,
                 timeout_seconds,
                 max_tokens=int(payload["max_tokens"]),
@@ -910,6 +1043,7 @@ def deepseek_text_analysis_client(
                 "status": "success",
                 "latency_ms": int(round((perf_counter() - attempt_started_at) * 1000)),
                 "api_usage": api_usage,
+                "response_model_name": response_model_name,
                 "error_message": None,
             }
         )
@@ -923,12 +1057,95 @@ def deepseek_text_analysis_client(
     raise AssertionError("DeepSeek 调用循环未返回结果。")
 
 
+def qwen_text_analysis_client(
+    evidence: dict[str, Any],
+    *,
+    api_key: str | None,
+    model_name: str = DEFAULT_QWEN_TEXT_MODEL_NAME,
+    base_url: str = DEFAULT_QWEN_VL_BASE_URL,
+    timeout_seconds: int = 60,
+    max_retries: int = 0,
+    max_tokens: int = DEFAULT_QWEN_TEXT_MAX_TOKENS,
+    compact_mode: bool = False,
+) -> dict[str, Any]:
+    """调用 DashScope Qwen 文本模型，并复用统一内容分析结构。"""
+
+    if not api_key:
+        raise ValueError("缺少 DASHSCOPE_API_KEY，无法调用 Qwen 文本分析 API。")
+    if max_retries not in {0, 1}:
+        raise ValueError("Qwen 文本分析最大重试次数只能是 0 或 1。")
+    max_tokens = _require_positive_int(max_tokens, "Qwen text max_tokens")
+    payload = {
+        "model": model_name,
+        "messages": _build_deepseek_messages(evidence, compact=compact_mode),
+        "response_format": {"type": "json_object"},
+        "enable_thinking": False,
+        "temperature": 0.2,
+        "max_completion_tokens": max_tokens,
+        "stream": False,
+    }
+
+    attempts: list[dict[str, Any]] = []
+    for attempt_index in range(max_retries + 1):
+        attempt_started_at = perf_counter()
+        api_request = request.Request(
+            f"{base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            result, api_usage, response_model_name = _perform_deepseek_request(
+                api_request,
+                timeout_seconds,
+                max_tokens=max_tokens,
+            )
+        except DeepSeekResponseError as exc:
+            qwen_error = QwenTextResponseError(
+                exc.error_code.replace("deepseek_", "qwen_text_"),
+                str(exc).split("] ", 1)[-1].replace("DeepSeek", "Qwen"),
+                retryable=exc.retryable,
+                api_usage=exc.api_usage,
+                response_diagnostics=exc.response_diagnostics,
+            )
+            attempts.append(
+                {
+                    "status": "failed",
+                    "latency_ms": int(round((perf_counter() - attempt_started_at) * 1000)),
+                    "api_usage": qwen_error.api_usage,
+                    "error_message": str(qwen_error),
+                    "response_diagnostics": qwen_error.response_diagnostics,
+                }
+            )
+            if qwen_error.retryable and attempt_index < max_retries:
+                continue
+            raise QwenTextAttemptsExhausted(qwen_error, attempts) from exc
+
+        attempts.append(
+            {
+                "status": "success",
+                "latency_ms": int(round((perf_counter() - attempt_started_at) * 1000)),
+                "api_usage": api_usage,
+                "response_model_name": response_model_name,
+                "error_message": None,
+            }
+        )
+        grounded_business_use, guard_applied = _ground_business_use(result["business_use"], evidence)
+        result["business_use"] = grounded_business_use
+        result["_quality_flags"] = ["business_use_grounded_fallback"] if guard_applied else []
+        result["_api_usage"] = api_usage
+        result["_api_attempts"] = attempts
+        return result
+
+    raise AssertionError("Qwen 文本分析调用循环未返回结果。")
+
+
 def _perform_deepseek_request(
     api_request: request.Request,
     timeout_seconds: int,
     *,
     max_tokens: int | None = None,
-) -> tuple[dict[str, Any], dict[str, int]]:
+) -> tuple[dict[str, Any], dict[str, int], str | None]:
     """执行单次 DeepSeek 请求，并解析、校验模型响应。"""
 
     try:
@@ -1035,7 +1252,7 @@ def _perform_deepseek_request(
             api_usage=api_usage,
             response_diagnostics=response_diagnostics,
         ) from exc
-    return result, api_usage
+    return result, api_usage, response_diagnostics.get("response_model_name")
 
 
 def _build_deepseek_response_diagnostics(

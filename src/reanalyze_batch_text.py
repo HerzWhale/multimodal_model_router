@@ -10,7 +10,14 @@ from typing import Any
 import yaml
 
 from cost_latency_tracker import build_model_call_record, load_model_prices
-from model_clients import DEFAULT_DEEPSEEK_MAX_TOKENS, DeepSeekAttemptsExhausted, deepseek_text_analysis_client
+from model_clients import (
+    DEFAULT_DEEPSEEK_MAX_TOKENS,
+    DEFAULT_QWEN_TEXT_MAX_TOKENS,
+    DeepSeekAttemptsExhausted,
+    QwenTextAttemptsExhausted,
+    deepseek_text_analysis_client,
+    qwen_text_analysis_client,
+)
 from pipeline_runner import _analysis_input_units, _analysis_output_units, _models_used_from_calls, _now_iso
 from report_generator import generate_batch_report, read_jsonl
 from result_writer import (
@@ -22,15 +29,43 @@ from result_writer import (
     write_results,
     write_results_readable,
 )
+from runtime_config import runtime_policy_section
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+TEXT_ANALYSIS_EXECUTION_POLICY = runtime_policy_section("text_analysis_execution")
+DEFERRED_TEXT_QUALITY_FLAG = str(TEXT_ANALYSIS_EXECUTION_POLICY["deferred_quality_flag"])
+DEFERRED_TEXT_WARNING = str(TEXT_ANALYSIS_EXECUTION_POLICY["deferred_warning"])
 
 
 def _load_settings(settings_path: str | Path) -> dict[str, Any]:
     """读取运行配置。"""
 
     return yaml.safe_load(Path(settings_path).read_text(encoding="utf-8"))
+
+
+def _setting(settings: dict[str, Any], dotted_key: str, legacy_key: str | None = None, default: Any = None) -> Any:
+    """读取新分层配置；缺失时兼容旧扁平配置。"""
+
+    current: Any = settings
+    for part in dotted_key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return settings.get(legacy_key, default) if legacy_key else default
+        current = current[part]
+    return current
+
+
+def _backend_setting(
+    settings: dict[str, Any],
+    backend_group: str,
+    backend_name: str,
+    key: str,
+    legacy_key: str,
+    default: Any = None,
+) -> Any:
+    """读取模型后端参数；兼容旧扁平键。"""
+
+    return _setting(settings, f"backends.{backend_group}.{backend_name}.{key}", legacy_key, default)
 
 
 def _resolve_path(path_value: str | Path) -> Path:
@@ -80,11 +115,17 @@ def _bool_setting(settings: dict[str, Any], key: str, default: bool) -> bool:
     """读取布尔配置。"""
 
     value = settings.get(key, default)
+    return _bool_value(value, key)
+
+
+def _bool_value(value: Any, name: str) -> bool:
+    """校验布尔配置值。"""
+
     if isinstance(value, bool):
         return value
     if isinstance(value, str) and value.lower() in {"true", "false"}:
         return value.lower() == "true"
-    raise ValueError(f"{key} 必须是 true 或 false。")
+    raise ValueError(f"{name} 必须是 true 或 false。")
 
 
 def _filter_records(source_records: list[dict[str, Any]], include_files: set[str]) -> list[dict[str, Any]]:
@@ -111,12 +152,14 @@ def _build_call(
     batch_id: str,
     record: dict[str, Any],
     model_name: str,
+    provider: str,
     input_units: list[dict[str, Any]],
     output_units: list[dict[str, Any]],
     latency_ms: int,
     status: str,
     error_message: str | None,
     model_prices: dict[str, dict[str, Any]],
+    response_model_name: str | None = None,
 ) -> dict[str, Any]:
     """生成本轮文本重分析的模型调用记录。"""
 
@@ -125,7 +168,7 @@ def _build_call(
         batch_id=batch_id,
         file_id=str(record["file_id"]),
         task_type="text_analysis",
-        provider="deepseek",
+        provider=provider,
         model_name=model_name,
         input_units=input_units,
         output_units=output_units,
@@ -134,6 +177,7 @@ def _build_call(
         status=status,
         error_message=error_message,
         model_prices=model_prices,
+        response_model_name=response_model_name,
     )
 
 
@@ -148,8 +192,17 @@ def reanalyze_records(
     max_retries: int,
     max_tokens: int,
     compact_mode: bool = False,
+    text_analysis_backend: str = "deepseek",
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    """逐条调用 DeepSeek，只更新文件级分类、标签、摘要和业务用途。"""
+    """逐条调用指定文本后端，只更新分类、标签、摘要和业务用途。"""
+
+    clients = {
+        "deepseek": ("deepseek", deepseek_text_analysis_client),
+        "qwen_text": ("qwen", qwen_text_analysis_client),
+    }
+    if text_analysis_backend not in clients:
+        raise ValueError(f"不支持的文本分析后端：{text_analysis_backend}")
+    provider, analysis_client = clients[text_analysis_backend]
 
     results: list[dict[str, Any]] = []
     model_calls: list[dict[str, Any]] = []
@@ -171,7 +224,7 @@ def reanalyze_records(
         record_calls: list[dict[str, Any]] = []
 
         try:
-            analysis_result = deepseek_text_analysis_client(
+            analysis_result = analysis_client(
                 evidence,
                 api_key=api_key,
                 model_name=model_name,
@@ -192,12 +245,14 @@ def reanalyze_records(
                     batch_id=batch_id,
                     record=source_record,
                     model_name=model_name,
+                    provider=provider,
                     input_units=_analysis_input_units(attempt_usage, evidence_text),
                     output_units=_analysis_output_units(attempt_usage, analysis_result if attempt_status == "success" else None),
                     latency_ms=int(attempt.get("latency_ms") or 0),
                     status=attempt_status,
                     error_message=attempt.get("error_message"),
                     model_prices=model_prices,
+                    response_model_name=attempt.get("response_model_name"),
                 )
                 record_calls.append(call)
             model_calls.extend(record_calls)
@@ -205,13 +260,16 @@ def reanalyze_records(
             old_quality_flags = [
                 flag
                 for flag in result_record.get("quality_flags", [])
-                if flag != "text_analysis_failed"
+                if flag not in {"text_analysis_failed", DEFERRED_TEXT_QUALITY_FLAG}
             ]
             result_record["quality_flags"] = list(dict.fromkeys([*old_quality_flags, *quality_flags]))
             result_record["warning_messages"] = [
                 warning
                 for warning in result_record.get("warning_messages", [])
-                if warning != "文本分析模型调用失败，无法产出有效分类、标签和摘要。"
+                if warning not in {
+                    "文本分析模型调用失败，无法产出有效分类、标签和摘要。",
+                    DEFERRED_TEXT_WARNING,
+                }
             ]
             if missing_evidence:
                 result_record["processing_status"] = "partial_success"
@@ -220,7 +278,7 @@ def reanalyze_records(
                 result_record["processing_status"] = "success"
             result_record["error_message"] = None
         except Exception as exc:
-            failed_attempts = exc.attempts if isinstance(exc, DeepSeekAttemptsExhausted) else []
+            failed_attempts = exc.attempts if isinstance(exc, (DeepSeekAttemptsExhausted, QwenTextAttemptsExhausted)) else []
             attempts = failed_attempts or [{"api_usage": {}, "latency_ms": 0, "error_message": str(exc), "status": "failed"}]
             for attempt_index, attempt in enumerate(attempts, start=1):
                 call = _build_call(
@@ -228,6 +286,7 @@ def reanalyze_records(
                     batch_id=batch_id,
                     record=source_record,
                     model_name=model_name,
+                    provider=provider,
                     input_units=_analysis_input_units(attempt.get("api_usage") or {}, evidence_text),
                     output_units=_analysis_output_units(attempt.get("api_usage") or {}, None),
                     latency_ms=int(attempt.get("latency_ms") or 0),
@@ -268,29 +327,61 @@ def reanalyze_records(
 def main() -> None:
     """命令行入口。"""
 
-    parser = argparse.ArgumentParser(description="复用已有 OCR / 视觉证据，只重跑 DeepSeek 文本分析层。")
+    parser = argparse.ArgumentParser(description="复用已有 OCR / 视觉 / ASR 证据，只重跑指定文本分析后端。")
     parser.add_argument("--source-batch-dir", required=True, help="已有批次目录，例如 output/batch_video_qwen_vl_4videos_review。")
     parser.add_argument("--batch-id", required=True, help="新输出批次 ID。")
     parser.add_argument("--settings", default="config/settings.yaml", help="配置文件路径。")
     parser.add_argument("--include-files", help="只处理指定文件名或 file_id，多个值用英文逗号分隔。")
-    parser.add_argument("--allow-live-api", action="store_true", help="必须显式授权，才会调用 DeepSeek。")
-    parser.add_argument("--max-api-retries", type=int, choices=[0, 1], default=0, help="DeepSeek 最多重试次数。")
-    parser.add_argument("--deepseek-max-tokens", type=int, help="DeepSeek 单次输出 token 上限；不传则读取 settings.yaml。")
+    parser.add_argument("--text-analysis-backend", choices=["deepseek", "qwen_text"], default="deepseek", help="本次只重跑的文本分析后端。")
+    parser.add_argument("--allow-live-api", action="store_true", help="必须显式授权，才会调用真实文本 API。")
+    parser.add_argument("--max-api-retries", type=int, choices=[0, 1], default=0, help="真实文本 API 最多重试次数。")
+    parser.add_argument(
+        "--max-tokens",
+        "--deepseek-max-tokens",
+        dest="max_tokens",
+        type=int,
+        help="文本分析单次输出 token 上限；旧 DeepSeek 参数名仍兼容。",
+    )
     args = parser.parse_args()
 
     if not args.allow_live_api:
-        raise SystemExit("错误：本命令会调用 DeepSeek，必须显式提供 --allow-live-api。")
+        raise SystemExit("错误：本命令会调用真实文本 API，必须显式提供 --allow-live-api。")
 
     settings = _load_settings(_resolve_path(args.settings))
-    api_key = os.getenv(str(settings.get("deepseek_api_key_env", "DEEPSEEK_API_KEY")))
-    if not api_key:
-        raise SystemExit("错误：未读取到 DEEPSEEK_API_KEY，已在发送网络请求前停止。")
-    try:
-        deepseek_max_tokens = _positive_int(
-            int(args.deepseek_max_tokens or settings.get("deepseek_max_tokens", DEFAULT_DEEPSEEK_MAX_TOKENS)),
-            "deepseek_max_tokens",
+    is_qwen = args.text_analysis_backend == "qwen_text"
+    backend_name = "qwen_text" if is_qwen else "deepseek"
+    api_key_env = str(
+        _backend_setting(
+            settings,
+            "text_analysis",
+            backend_name,
+            "api_key_env",
+            "qwen_text_api_key_env" if is_qwen else "deepseek_api_key_env",
+            "DASHSCOPE_API_KEY" if is_qwen else "DEEPSEEK_API_KEY",
         )
-        deepseek_compact_mode = _bool_setting(settings, "deepseek_compact_mode", False)
+    )
+    api_key = os.getenv(api_key_env)
+    if not api_key:
+        raise SystemExit(f"错误：未读取到 {api_key_env}，已在发送网络请求前停止。")
+    try:
+        max_tokens = _positive_int(
+            int(
+                args.max_tokens
+                or _backend_setting(
+                    settings,
+                    "text_analysis",
+                    backend_name,
+                    "max_tokens",
+                    "qwen_text_max_tokens" if is_qwen else "deepseek_max_tokens",
+                    DEFAULT_QWEN_TEXT_MAX_TOKENS if is_qwen else DEFAULT_DEEPSEEK_MAX_TOKENS,
+                )
+            ),
+            "max_tokens",
+        )
+        compact_mode = _bool_value(
+            _backend_setting(settings, "text_analysis", "deepseek", "compact_mode", "deepseek_compact_mode", False),
+            "deepseek_compact_mode",
+        )
     except ValueError as exc:
         raise SystemExit(f"错误：{exc}") from exc
 
@@ -304,15 +395,32 @@ def main() -> None:
         source_records=source_records,
         batch_id=args.batch_id,
         api_key=api_key,
-        model_name=str(settings.get("deepseek_model_name", "deepseek-v4-flash")),
-        base_url=str(settings.get("deepseek_base_url", "https://api.deepseek.com")),
+        model_name=str(
+            _backend_setting(
+                settings,
+                "text_analysis",
+                backend_name,
+                "model_name",
+                "qwen_text_model_name" if is_qwen else "deepseek_model_name",
+            )
+        ),
+        base_url=str(
+            _backend_setting(
+                settings,
+                "text_analysis",
+                backend_name,
+                "base_url",
+                "qwen_text_base_url" if is_qwen else "deepseek_base_url",
+            )
+        ),
         model_prices=model_prices,
         max_retries=args.max_api_retries,
-        max_tokens=deepseek_max_tokens,
-        compact_mode=deepseek_compact_mode,
+        max_tokens=max_tokens,
+        compact_mode=compact_mode,
+        text_analysis_backend=args.text_analysis_backend,
     )
 
-    output_dir = _resolve_path(settings.get("output_dir", "output"))
+    output_dir = _resolve_path(_setting(settings, "paths.output_dir", "output_dir", "output"))
     batch_dir = ensure_batch_output_dir(output_dir, args.batch_id)
     write_batch_metadata(
         output_dir,
@@ -322,9 +430,18 @@ def main() -> None:
             "batch_id": args.batch_id,
             "source_batch_dir": str(source_batch_dir),
             "reanalyze_scope": "text_analysis_only",
-            "text_analysis_backend": "deepseek",
-            "deepseek_max_tokens": deepseek_max_tokens,
-            "deepseek_compact_mode": deepseek_compact_mode,
+            "text_analysis_backend": args.text_analysis_backend,
+            "text_analysis_model_name": str(
+                _backend_setting(
+                    settings,
+                    "text_analysis",
+                    backend_name,
+                    "model_name",
+                    "qwen_text_model_name" if is_qwen else "deepseek_model_name",
+                )
+            ),
+            "text_analysis_max_tokens": max_tokens,
+            "text_analysis_compact_mode": compact_mode,
             "note": "本批次复用历史 OCR 和视觉理解证据，不重新调用 OCR、Qwen-VL 或 ASR。",
         },
     )
@@ -337,7 +454,7 @@ def main() -> None:
         results=results,
         model_calls=model_calls,
         errors=errors,
-        budget_limit_cny=float(settings.get("default_budget_limit_cny", 50)),
+        budget_limit_cny=float(_setting(settings, "runtime.default_budget_limit_cny", "default_budget_limit_cny", 50)),
     )
     write_json(batch_dir / "batch_report.json", batch_report)
     print({"batch_id": args.batch_id, "batch_dir": str(batch_dir), "total_files": len(results), "total_model_calls": len(model_calls), "total_errors": len(errors)})

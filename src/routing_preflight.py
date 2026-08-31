@@ -864,8 +864,10 @@ def build_preflight_report(
 
 def build_preflight_from_files(
     *,
-    routing_rules_path: str | Path,
+    routing_rules_path: str | Path | None,
     model_prices_path: str | Path,
+    routing_rules_override: dict[str, dict[str, str]] | None = None,
+    routing_source: str | None = None,
     policy_config_path: str | Path | None = None,
     policy_name: str = "balanced",
     expected_task_types: list[str] | tuple[str, ...] | None = None,
@@ -889,9 +891,14 @@ def build_preflight_from_files(
 ) -> dict[str, Any]:
     """从本地配置文件生成预检查报告。"""
 
-    routing_rules_file = Path(routing_rules_path)
+    routing_rules_file = Path(routing_rules_path) if routing_rules_path is not None else None
     model_prices_file = Path(model_prices_path)
-    routing_rules = load_routing_rules(routing_rules_file)
+    if routing_rules_override is None:
+        if routing_rules_file is None:
+            raise ValueError("必须提供 routing_rules_path 或 routing_rules_override。")
+        routing_rules = load_routing_rules(routing_rules_file)
+    else:
+        routing_rules = {task: dict(rule) for task, rule in routing_rules_override.items()}
     model_prices = load_model_prices(model_prices_file)
     routing_rules = apply_backend_overrides(
         routing_rules,
@@ -950,7 +957,7 @@ def build_preflight_from_files(
         generated_at=generated_at,
         max_price_age_days=max_price_age_days,
         source_files={
-            "routing_rules": str(routing_rules_file),
+            "routing_rules": routing_source or (str(routing_rules_file) if routing_rules_file else "runtime_settings"),
             "model_prices": str(model_prices_file),
             "policy_config": policy_config_source,
             "historical_model_calls": [str(Path(path)) for path in historical_model_calls_paths or []],
@@ -967,10 +974,16 @@ def write_preflight_reports(output_dir: str | Path, report: dict[str, Any]) -> d
     markdown_path = path / "routing_preflight_report.md"
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     markdown_path.write_text(render_preflight_markdown(report), encoding="utf-8")
-    return {
+    paths = {
         "json": str(json_path),
         "markdown": str(markdown_path),
     }
+    route_plan = report.get("route_plan")
+    if isinstance(route_plan, dict):
+        route_plan_path = path / "route_plan.json"
+        route_plan_path.write_text(json.dumps(route_plan, ensure_ascii=False, indent=2), encoding="utf-8")
+        paths["route_plan"] = str(route_plan_path)
+    return paths
 
 
 def _build_route_entry(

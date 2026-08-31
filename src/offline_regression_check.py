@@ -113,6 +113,7 @@ def check_batch_completeness(batch_dir: str | Path, *, require_no_mock: bool = F
 
     seen_file_ids: set[str] = set()
     selected_backends = metadata.get("selected_backends") if isinstance(metadata.get("selected_backends"), dict) else {}
+    selected_pipelines = metadata.get("selected_pipelines") if isinstance(metadata.get("selected_pipelines"), dict) else {}
     for result in results:
         file_id = result.get("file_id")
         if not isinstance(file_id, str) or not file_id:
@@ -121,7 +122,11 @@ def check_batch_completeness(batch_dir: str | Path, *, require_no_mock: bool = F
         if file_id in seen_file_ids:
             issues.append(f"{file_id} 重复出现在 results.jsonl 中")
         seen_file_ids.add(file_id)
-        _check_result_record(result, call_by_id, calls_by_file.get(file_id, []), selected_backends, issues)
+        media_type = str(result.get("media_type"))
+        media_backends = selected_pipelines.get(media_type)
+        if not isinstance(media_backends, dict):
+            media_backends = selected_backends
+        _check_result_record(result, call_by_id, calls_by_file.get(file_id, []), media_backends, issues)
 
     cost_stats = batch_report.get("cost_stats") if isinstance(batch_report.get("cost_stats"), dict) else {}
     latency_stats = batch_report.get("latency_stats") if isinstance(batch_report.get("latency_stats"), dict) else {}

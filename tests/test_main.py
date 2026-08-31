@@ -12,6 +12,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_ROOT / "src"
@@ -19,8 +21,10 @@ sys.path.insert(0, str(SRC_DIR))
 
 from main import main as cli_main
 from main import _build_backend_runtime_summary
+from main import _pipeline_selection
 from main import run_batch
 from main import run_preflight
+from model_router import build_route_plan
 
 
 def _read_json_objects(file_path: Path) -> list[dict]:
@@ -45,6 +49,49 @@ def _read_json_objects(file_path: Path) -> list[dict]:
 
 
 class MainTest(unittest.TestCase):
+    def _write_nested_mock_settings(self, root: Path) -> Path:
+        """写入可生成和执行路由计划的最小双层配置。"""
+
+        config_dir = root / "config"
+        input_dir = root / "input"
+        config_dir.mkdir()
+        input_dir.mkdir()
+        (input_dir / "demo.txt").write_text("这是一段 AI 工具教程", encoding="utf-8")
+        settings = yaml.safe_load((PROJECT_ROOT / "config" / "settings.yaml").read_text(encoding="utf-8"))
+        settings["paths"] = {"input_dir": "input", "output_dir": "output"}
+        settings_path = config_dir / "settings.yaml"
+        settings_path.write_text(yaml.safe_dump(settings, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        return settings_path
+
+    def _write_route_decision(
+        self,
+        root: Path,
+        *,
+        candidate: str = "deepseek",
+        status: str = "warning",
+    ) -> Path:
+        path = root / "route_decision.json"
+        report = {
+            "report_type": "phase2_text_backend_comparison_gate",
+            "generated_at": "2026-08-31T10:00:00+08:00",
+            "overall_status": status,
+            "selected_candidates": [candidate] if status == "pass" else [],
+            "recommended_candidate": candidate,
+            "recommendation_status": status,
+            "unmet_constraints": [] if status == "pass" else ["p95_latency_ms"],
+            "candidate_evaluations": {
+                candidate: {
+                    "quality_pass": True,
+                    "latency_pass": status == "pass",
+                    "text_analysis_p95_latency_ms": 10702,
+                    "successful_text_call_count": 3,
+                    "estimated_cost_cny": 0.010127,
+                }
+            },
+        }
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
     def _write_settings(
         self,
         root: Path,
@@ -157,6 +204,26 @@ class MainTest(unittest.TestCase):
                 "unknown_until_bill_reconciliation",
             )
 
+    def test_run_batch_deferred_text_analysis_does_not_require_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings_path = self._write_settings(root, backend="deepseek")
+
+            summary = run_batch(
+                settings_path=settings_path,
+                defer_text_analysis=True,
+                batch_id="batch_deferred",
+            )
+
+            batch_dir = Path(summary["batch_dir"])
+            results = _read_json_objects(batch_dir / "results.jsonl")
+            model_calls = _read_json_objects(batch_dir / "model_calls.jsonl")
+            metadata = json.loads((batch_dir / "batch_metadata.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(results[0]["processing_status"], "pending")
+        self.assertEqual(model_calls, [])
+        self.assertEqual(metadata["text_analysis_execution_mode"], "deferred")
+
     def test_cli_input_dir_override_keeps_evaluation_separate_from_default_input(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -266,12 +333,360 @@ class MainTest(unittest.TestCase):
             self.assertTrue((report_dir / "routing_preflight_report.md").exists())
             self.assertFalse((report_dir / "results.jsonl").exists())
 
-    def test_repository_default_backend_is_mock(self) -> None:
-        settings = (PROJECT_ROOT / "config" / "settings.yaml").read_text(encoding="utf-8")
+    def test_nested_preflight_writes_executable_route_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings_path = self._write_nested_mock_settings(root)
+            summary = run_preflight(
+                settings_path=settings_path,
+                model_prices_path=PROJECT_ROOT / "config" / "model_prices.yaml",
+                policy_config_path=PROJECT_ROOT / "config" / "routing_policy_config.yaml",
+                batch_id="preflight_route_plan",
+                include_file_names=["demo.txt"],
+                generated_at="2026-08-30T12:00:00+08:00",
+            )
 
-        self.assertIn("ocr_backend: mock", settings)
-        self.assertIn("vision_understanding_backend: mock", settings)
-        self.assertIn("text_analysis_backend: mock", settings)
+            route_plan_path = Path(summary["report_paths"]["route_plan"])
+            route_plan = json.loads(route_plan_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(route_plan_path.name == "route_plan.json")
+        self.assertEqual(route_plan["preflight_status"], summary["preflight_status"])
+        self.assertEqual(route_plan["selected_pipelines"]["text"]["text_analysis"], "mock")
+        self.assertFalse(route_plan["requires_live_api"])
+
+    def test_nested_preflight_applies_compact_route_decision_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings_path = self._write_nested_mock_settings(root)
+            decision_path = self._write_route_decision(root)
+            summary = run_preflight(
+                settings_path=settings_path,
+                model_prices_path=PROJECT_ROOT / "config" / "model_prices.yaml",
+                policy_config_path=PROJECT_ROOT / "config" / "routing_policy_config.yaml",
+                batch_id="preflight_route_decision",
+                include_file_names=["demo.txt"],
+                route_decision_report_path=decision_path,
+            )
+            route_plan = json.loads(
+                Path(summary["report_paths"]["route_plan"]).read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(route_plan["preflight_status"], "warning")
+        self.assertEqual(route_plan["selected_pipelines"]["text"]["text_analysis"], "deepseek")
+        self.assertTrue(route_plan["requires_live_api"])
+        decision = route_plan["selection_decisions"][0]
+        self.assertEqual(decision["recommended_candidate"], "deepseek")
+        self.assertEqual(decision["unmet_constraints"], ["p95_latency_ms"])
+        self.assertEqual(
+            decision["non_compared_tasks"],
+            ["ocr", "speech_to_text", "vision_understanding"],
+        )
+        self.assertNotIn("candidate_evaluations", decision)
+
+    def test_nested_preflight_rejects_unknown_route_decision_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings_path = self._write_nested_mock_settings(root)
+            decision_path = self._write_route_decision(root, candidate="missing_backend")
+
+            with self.assertRaisesRegex(ValueError, "不存在的文本后端"):
+                run_preflight(
+                    settings_path=settings_path,
+                    route_decision_report_path=decision_path,
+                    batch_id="preflight_unknown_route_decision",
+                    include_file_names=["demo.txt"],
+                )
+
+    def test_nested_preflight_rejects_legacy_routing_rules_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            settings_path = self._write_nested_mock_settings(Path(tmp_dir))
+            with self.assertRaisesRegex(ValueError, "唯一事实来源"):
+                run_preflight(
+                    settings_path=settings_path,
+                    routing_rules_path=PROJECT_ROOT / "config" / "routing_rules.yaml",
+                    model_prices_path=PROJECT_ROOT / "config" / "model_prices.yaml",
+                    policy_config_path=PROJECT_ROOT / "config" / "routing_policy_config.yaml",
+                    batch_id="preflight_legacy_source_rejected",
+                    include_file_names=["demo.txt"],
+                )
+
+    def test_run_batch_consumes_warning_route_plan_through_pipeline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings_path = self._write_nested_mock_settings(root)
+            settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+            route_plan = build_route_plan(
+                settings,
+                preflight_status="warning",
+                policy_name="balanced",
+                source_settings=str(settings_path),
+                generated_at="2026-08-30T12:00:00+08:00",
+            )
+            route_plan_path = root / "route_plan.json"
+            route_plan_path.write_text(json.dumps(route_plan, ensure_ascii=False, indent=2), encoding="utf-8")
+
+            summary = run_batch(
+                settings_path=settings_path,
+                model_prices_path=PROJECT_ROOT / "config" / "model_prices.yaml",
+                route_plan_path=route_plan_path,
+                batch_id="batch_route_plan",
+                created_at="2026-08-30T12:01:00+08:00",
+                generated_at="2026-08-30T12:02:00+08:00",
+            )
+            batch_dir = Path(summary["batch_dir"])
+            metadata = json.loads((batch_dir / "batch_metadata.json").read_text(encoding="utf-8"))
+            calls = _read_json_objects(batch_dir / "model_calls.jsonl")
+
+        self.assertEqual(metadata["route_plan"]["preflight_status"], "warning")
+        self.assertEqual(metadata["selected_pipelines"]["text"]["text_analysis_backend"], "mock")
+        self.assertEqual(calls[0]["provider"], "local")
+        self.assertEqual(calls[0]["model_name"], "mock-text")
+
+    def test_run_batch_rejects_failed_or_drifted_route_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings_path = self._write_nested_mock_settings(root)
+            settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+            route_plan = build_route_plan(
+                settings,
+                preflight_status="fail",
+                policy_name="balanced",
+                source_settings=str(settings_path),
+            )
+            route_plan_path = root / "route_plan.json"
+            route_plan_path.write_text(json.dumps(route_plan, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "fail"):
+                run_batch(
+                    settings_path=settings_path,
+                    model_prices_path=PROJECT_ROOT / "config" / "model_prices.yaml",
+                    route_plan_path=route_plan_path,
+                    batch_id="batch_failed_plan",
+                )
+
+            route_plan["preflight_status"] = "warning"
+            route_plan_path.write_text(json.dumps(route_plan, ensure_ascii=False), encoding="utf-8")
+            settings["pipelines"]["text"]["text_analysis"] = "deepseek"
+            settings_path.write_text(yaml.safe_dump(settings, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "配置漂移"):
+                run_batch(
+                    settings_path=settings_path,
+                    model_prices_path=PROJECT_ROOT / "config" / "model_prices.yaml",
+                    route_plan_path=route_plan_path,
+                    batch_id="batch_drifted_plan",
+                )
+
+    def test_run_batch_rejects_route_plan_with_backend_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings_path = self._write_nested_mock_settings(root)
+            settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+            route_plan = build_route_plan(
+                settings,
+                preflight_status="warning",
+                policy_name="balanced",
+                source_settings=str(settings_path),
+            )
+            route_plan_path = root / "route_plan.json"
+            route_plan_path.write_text(json.dumps(route_plan, ensure_ascii=False), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "不能同时指定后端覆盖参数"):
+                run_batch(
+                    settings_path=settings_path,
+                    model_prices_path=PROJECT_ROOT / "config" / "model_prices.yaml",
+                    route_plan_path=route_plan_path,
+                    ocr_backend_override="mock",
+                    batch_id="batch_conflicting_plan",
+                )
+
+    def test_live_route_plan_still_requires_explicit_api_permission(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            settings_path = self._write_nested_mock_settings(root)
+            settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+            route_plan = build_route_plan(
+                settings,
+                preflight_status="warning",
+                policy_name="balanced",
+                source_settings=str(settings_path),
+                text_analysis_backend="deepseek",
+            )
+            route_plan_path = root / "route_plan.json"
+            route_plan_path.write_text(json.dumps(route_plan, ensure_ascii=False), encoding="utf-8")
+
+            with self.assertRaisesRegex(PermissionError, "--allow-live-api"):
+                run_batch(
+                    settings_path=settings_path,
+                    model_prices_path=PROJECT_ROOT / "config" / "model_prices.yaml",
+                    route_plan_path=route_plan_path,
+                    batch_id="batch_live_plan_blocked",
+                )
+
+    def test_repository_default_ocr_backend_falls_back_to_paddle_after_qwen_gate_failure(self) -> None:
+        settings = yaml.safe_load((PROJECT_ROOT / "config" / "settings.yaml").read_text(encoding="utf-8"))
+
+        self.assertEqual(settings["pipelines"]["image"]["ocr"], "paddleocr")
+        self.assertEqual(settings["pipelines"]["video"]["keyframe_ocr"], "paddleocr")
+        self.assertEqual(settings["pipelines"]["image"]["vision_understanding"], "mock")
+        self.assertEqual(settings["pipelines"]["text"]["text_analysis"], "mock")
+        self.assertEqual(settings["pipelines"]["video"]["speech_to_text"], "mock")
+
+    def test_run_batch_rejects_qwen_ocr_without_live_permission(self) -> None:
+        with self.assertRaisesRegex(PermissionError, "Qwen3.5-OCR"):
+            run_batch(
+                settings_path=PROJECT_ROOT / "config" / "settings.yaml",
+                input_dir_override=PROJECT_ROOT / "input",
+                include_file_names=["img_1.png"],
+                ocr_backend_override="qwen_ocr",
+                vision_understanding_backend_override="mock",
+                speech_to_text_backend_override="mock",
+                text_analysis_backend_override="mock",
+                batch_id="batch_qwen_ocr_blocked",
+            )
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_qwen_ocr_with_permission_but_without_key_stops_before_output(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "DASHSCOPE_API_KEY"):
+            run_batch(
+                settings_path=PROJECT_ROOT / "config" / "settings.yaml",
+                input_dir_override=PROJECT_ROOT / "input",
+                include_file_names=["img_1.png"],
+                ocr_backend_override="qwen_ocr",
+                vision_understanding_backend_override="mock",
+                speech_to_text_backend_override="mock",
+                text_analysis_backend_override="mock",
+                allow_live_api=True,
+                batch_id="batch_qwen_ocr_missing_key",
+            )
+        self.assertFalse((PROJECT_ROOT / "output" / "batch_qwen_ocr_missing_key").exists())
+
+    def test_pipeline_selection_distinguishes_media_chains(self) -> None:
+        settings = {
+            "pipelines": {
+                "text": {"text_analysis": "deepseek"},
+                "image": {"ocr": "paddleocr", "vision_understanding": "qwen_vl", "text_analysis": "deepseek"},
+                "video": {
+                    "keyframe_ocr": "mock",
+                    "keyframe_vision_understanding": "qwen_vl",
+                    "speech_to_text": "dashscope_asr",
+                    "text_analysis": "qwen_text",
+                },
+            }
+        }
+
+        self.assertEqual(_pipeline_selection(settings, "text")["vision_understanding_backend"], "mock")
+        self.assertEqual(_pipeline_selection(settings, "image")["ocr_backend"], "paddleocr")
+        self.assertEqual(
+            _pipeline_selection(settings, "video"),
+            {
+                "ocr_backend": "mock",
+                "vision_understanding_backend": "qwen_vl",
+                "speech_to_text_backend": "dashscope_asr",
+                "text_analysis_backend": "qwen_text",
+            },
+        )
+
+    @patch("main.run_file_pipeline")
+    def test_run_batch_reads_nested_settings(self, mock_pipeline) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            config_dir = root / "config"
+            input_dir = root / "input"
+            config_dir.mkdir()
+            input_dir.mkdir()
+            (input_dir / "demo.txt").write_text("这是一段 AI 工具教程", encoding="utf-8")
+            (input_dir / "demo.png").write_bytes(b"not-decoded-because-pipeline-is-mocked")
+            (config_dir / "routing_rules.yaml").write_text(
+                (PROJECT_ROOT / "config" / "routing_rules.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (config_dir / "model_prices.yaml").write_text(
+                (PROJECT_ROOT / "config" / "model_prices.yaml").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            settings_path = config_dir / "settings.yaml"
+            settings_path.write_text(
+                """
+paths:
+  input_dir: input
+  output_dir: output
+runtime:
+  default_budget_limit_cny: 50
+  target_output_format: jsonl
+  allow_partial_success: true
+pipelines:
+  text:
+    text_analysis: deepseek
+  image:
+    ocr: mock
+    vision_understanding: qwen_vl
+  video:
+    speech_to_text: mock
+backends:
+  text_analysis:
+    deepseek:
+      api_key_env: TEST_DEEPSEEK_API_KEY
+      base_url: https://deepseek.test
+      model_name: deepseek-test
+      max_tokens: 2200
+      compact_mode: true
+      evidence_char_limit: 1234
+  vision_understanding:
+    qwen_vl:
+      api_key_env: TEST_DASHSCOPE_API_KEY
+      base_url: https://qwen.test
+      model_name: qwen-vl-test
+      max_tokens: 333
+      max_image_side: 444
+""",
+                encoding="utf-8",
+            )
+            mock_pipeline.return_value = {
+                "result": {
+                    "schema_version": "v1",
+                    "batch_id": "batch_nested",
+                    "file_id": "file_001",
+                    "file_name": "demo.txt",
+                    "media_type": "text",
+                    "processing_status": "success",
+                    "processing_cost_cny": 0,
+                    "processing_time_ms": 0,
+                    "quality_flags": [],
+                    "warning_messages": [],
+                    "models_used": [],
+                },
+                "model_calls": [],
+                "errors": [],
+            }
+            old_deepseek = os.environ.get("TEST_DEEPSEEK_API_KEY")
+            old_dashscope = os.environ.get("TEST_DASHSCOPE_API_KEY")
+            os.environ["TEST_DEEPSEEK_API_KEY"] = "test-deepseek"
+            os.environ["TEST_DASHSCOPE_API_KEY"] = "test-dashscope"
+            try:
+                run_batch(settings_path=settings_path, allow_live_api=True, batch_id="batch_nested")
+            finally:
+                if old_deepseek is None:
+                    os.environ.pop("TEST_DEEPSEEK_API_KEY", None)
+                else:
+                    os.environ["TEST_DEEPSEEK_API_KEY"] = old_deepseek
+                if old_dashscope is None:
+                    os.environ.pop("TEST_DASHSCOPE_API_KEY", None)
+                else:
+                    os.environ["TEST_DASHSCOPE_API_KEY"] = old_dashscope
+
+        calls_by_media = {call.args[0]["media_type"]: call.kwargs for call in mock_pipeline.call_args_list}
+        text_kwargs = calls_by_media["text"]
+        image_kwargs = calls_by_media["image"]
+        self.assertEqual(text_kwargs["text_analysis_backend"], "deepseek")
+        self.assertEqual(text_kwargs["vision_understanding_backend"], "mock")
+        self.assertEqual(image_kwargs["vision_understanding_backend"], "qwen_vl")
+        self.assertEqual(text_kwargs["deepseek_model_name"], "deepseek-test")
+        self.assertEqual(text_kwargs["deepseek_base_url"], "https://deepseek.test")
+        self.assertEqual(text_kwargs["deepseek_max_tokens"], 2200)
+        self.assertEqual(text_kwargs["text_analysis_evidence_char_limit"], 1234)
+        self.assertEqual(image_kwargs["qwen_vl_model_name"], "qwen-vl-test")
+        self.assertEqual(image_kwargs["qwen_vl_base_url"], "https://qwen.test")
+        self.assertEqual(image_kwargs["qwen_vl_max_tokens"], 333)
+        self.assertEqual(image_kwargs["qwen_vl_max_image_side"], 444)
 
     def test_backend_runtime_summary_distinguishes_live_local_and_mock_calls(self) -> None:
         model_calls = [
@@ -377,9 +792,14 @@ class MainTest(unittest.TestCase):
                 backend="mock",
                 vision_backend="qwen_vl",
             )
+            (Path(tmp_dir) / "input" / "demo.png").write_bytes(b"image")
 
             with self.assertRaisesRegex(PermissionError, "--allow-live-api"):
-                run_batch(settings_path=settings_path, batch_id="batch_qwen_vl_blocked")
+                run_batch(
+                    settings_path=settings_path,
+                    include_file_names=["demo.png"],
+                    batch_id="batch_qwen_vl_blocked",
+                )
 
     def test_run_batch_rejects_dashscope_asr_without_live_permission(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -400,8 +820,13 @@ class MainTest(unittest.TestCase):
                 backend="mock",
                 ocr_backend="paddleocr",
             )
+            (Path(tmp_dir) / "input" / "demo.png").write_bytes(b"image")
 
-            summary = run_batch(settings_path=settings_path, batch_id="batch_local_ocr")
+            summary = run_batch(
+                settings_path=settings_path,
+                include_file_names=["demo.png"],
+                batch_id="batch_local_ocr",
+            )
 
         self.assertEqual(summary["total_files"], 1)
         mock_runtime_check.assert_called_once_with()
@@ -455,6 +880,18 @@ class MainTest(unittest.TestCase):
         self.assertEqual(call_kwargs["speech_to_text_backend_override"], "dashscope_asr")
         self.assertEqual(call_kwargs["text_analysis_backend_override"], "deepseek")
         self.assertEqual(call_kwargs["historical_model_calls_paths"], ["output/demo/model_calls.jsonl"])
+
+    @patch("main.run_batch")
+    @patch("main.run_preflight")
+    def test_cli_route_decision_is_preflight_only(self, mock_run_preflight, mock_run_batch) -> None:
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = cli_main(["--route-decision-report", "decision.json"])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("只用于 --preflight-only", stdout.getvalue())
+        mock_run_preflight.assert_not_called()
+        mock_run_batch.assert_not_called()
 
     @patch("main.run_batch")
     def test_cli_paddleocr_keeps_unselected_text_backend_mock(self, mock_run_batch) -> None:

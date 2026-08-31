@@ -22,11 +22,16 @@ from model_clients import (
     QwenVLAttemptsExhausted,
     QwenVLResponseError,
 )
-from model_router import load_routing_rules
+from model_router import build_route_plan, load_routing_rules
 from pipeline_runner import LOW_QUALITY_OCR_FLAG, VIDEO_EVIDENCE_WEAK_FLAG, _is_low_quality_ocr_text, run_file_pipeline
 
 
 class PipelineRunnerTest(unittest.TestCase):
+    def test_low_quality_gate_rejects_long_ascii_fragment_flood(self) -> None:
+        noisy_text = "\n".join(["_"] * 40 + ["AA"] * 40 + ["INT Scheduler 80 Entry"])
+
+        self.assertTrue(_is_low_quality_ocr_text(noisy_text))
+
     def setUp(self) -> None:
         self.routing_rules = load_routing_rules(PROJECT_ROOT / "config" / "routing_rules.yaml")
         self.model_prices = load_model_prices(PROJECT_ROOT / "config" / "model_prices.yaml")
@@ -173,6 +178,76 @@ class PipelineRunnerTest(unittest.TestCase):
         self.assertEqual(output["model_calls"][0]["task_type"], "text_analysis")
         self.assertEqual(result["models_used"][0]["model_name"], output["model_calls"][0]["model_name"])
 
+    def test_route_plan_controls_backend_inside_pipeline(self) -> None:
+        settings = {
+            "pipelines": {"text": {"text_analysis": "mock"}},
+            "backends": {
+                "text_analysis": {"mock": {"provider": "local", "model_name": "mock-text"}},
+            },
+        }
+        route_plan = build_route_plan(
+            settings,
+            preflight_status="warning",
+            policy_name="balanced",
+            source_settings="config/settings.yaml",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "demo.txt"
+            path.write_text("这是一段 AI 工具教程", encoding="utf-8")
+            output = run_file_pipeline(
+                self._file_record(path, "text"),
+                self.routing_rules,
+                self.model_prices,
+                route_plan=route_plan,
+                text_analysis_backend="deepseek",
+            )
+
+        self.assertEqual(output["model_calls"][0]["provider"], "local")
+        self.assertEqual(output["model_calls"][0]["model_name"], "mock-text")
+
+    @patch("pipeline_runner.deepseek_text_analysis_client")
+    def test_deferred_text_analysis_keeps_evidence_without_text_call(self, mock_deepseek) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "demo.txt"
+            path.write_text("这是一段 AI 工具教程", encoding="utf-8")
+
+            output = run_file_pipeline(
+                self._file_record(path, "text"),
+                self.routing_rules,
+                self.model_prices,
+                text_analysis_backend="deepseek",
+                defer_text_analysis=True,
+            )
+
+        result = output["result"]
+        self.assertEqual(result["processing_status"], "pending")
+        self.assertEqual(result["evidence_used"], ["raw_text"])
+        self.assertIsNone(result["topic"])
+        self.assertIn("text_analysis_deferred", result["quality_flags"])
+        self.assertEqual(output["model_calls"], [])
+        mock_deepseek.assert_not_called()
+
+    @patch("pipeline_runner.deepseek_text_analysis_client")
+    def test_deferred_text_analysis_rejects_empty_evidence(self, mock_deepseek) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "empty.txt"
+            path.write_text("", encoding="utf-8")
+
+            output = run_file_pipeline(
+                self._file_record(path, "text"),
+                self.routing_rules,
+                self.model_prices,
+                text_analysis_backend="deepseek",
+                defer_text_analysis=True,
+            )
+
+        result = output["result"]
+        self.assertEqual(result["processing_status"], "failed")
+        self.assertIn("no_usable_evidence", result["quality_flags"])
+        self.assertTrue(result["error_message"])
+        self.assertEqual(output["model_calls"], [])
+        mock_deepseek.assert_not_called()
+
     def test_run_image_pipeline(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "demo.png"
@@ -209,6 +284,33 @@ class PipelineRunnerTest(unittest.TestCase):
         self.assertEqual(ocr_call["model_name"], "PP-OCRv5_mobile")
         self.assertEqual(ocr_call["cost_cny"], 0.0)
         mock_ocr.assert_called_once_with(str(path))
+
+    @patch("pipeline_runner.qwen_ocr_client")
+    def test_image_pipeline_uses_qwen_ocr_and_records_tokens(self, mock_ocr) -> None:
+        mock_ocr.return_value = {
+            "ocr_text": "标题\n这是一段足够完整的正文内容",
+            "_api_usage": {"prompt_tokens": 240, "completion_tokens": 24, "total_tokens": 264},
+            "_response_model_name": "qwen3.5-ocr",
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "demo.png"
+            path.write_bytes(b"image")
+            output = run_file_pipeline(
+                self._file_record(path, "image"),
+                self.routing_rules,
+                self.model_prices,
+                ocr_backend="qwen_ocr",
+                qwen_ocr_api_key="test-key",
+            )
+
+        ocr_call = output["model_calls"][0]
+        self.assertEqual(ocr_call["provider"], "qwen")
+        self.assertEqual(ocr_call["model_name"], "qwen3.5-ocr")
+        self.assertEqual(ocr_call["response_model_name"], "qwen3.5-ocr")
+        self.assertEqual(ocr_call["input_units"], [{"unit_type": "input_tokens", "quantity": 240}])
+        self.assertEqual(ocr_call["output_units"], [{"unit_type": "output_tokens", "quantity": 24}])
+        self.assertEqual(ocr_call["cost_cny"], 0.000168)
+        mock_ocr.assert_called_once()
 
     @patch("pipeline_runner.qwen_vl_image_understanding_client")
     def test_image_pipeline_uses_qwen_vl_backend(self, mock_vision) -> None:
@@ -450,6 +552,39 @@ class PipelineRunnerTest(unittest.TestCase):
         self.assertEqual(ocr_call["status"], "success")
         self.assertEqual(ocr_call["cost_cny"], 0.0)
         mock_local_ocr.assert_called_once_with(str(keyframe_path))
+
+    @patch("pipeline_runner.qwen_ocr_client")
+    def test_video_pipeline_uses_qwen_ocr_on_each_keyframe(self, mock_ocr) -> None:
+        def response(image_path, **_kwargs):
+            return {
+                "ocr_text": f"文字-{Path(image_path).stem}",
+                "_api_usage": {"prompt_tokens": 20, "completion_tokens": 4, "total_tokens": 24},
+                "_response_model_name": "qwen3.5-ocr",
+            }
+
+        mock_ocr.side_effect = response
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "demo.mp4"
+            frame1 = Path(tmp_dir) / "frame1.jpg"
+            frame2 = Path(tmp_dir) / "frame2.jpg"
+            path.write_bytes(b"video")
+            frame1.write_bytes(b"frame1")
+            frame2.write_bytes(b"frame2")
+            preprocessed = self._video_preprocess_with_keyframe(path, frame1)
+            preprocessed["keyframes"] = [str(frame1), str(frame2)]
+            with patch("pipeline_runner.preprocess_file", return_value=preprocessed):
+                output = run_file_pipeline(
+                    self._file_record(path, "video"),
+                    self.routing_rules,
+                    self.model_prices,
+                    ocr_backend="qwen_ocr",
+                    qwen_ocr_api_key="test-key",
+                )
+
+        ocr_calls = [call for call in output["model_calls"] if call["task_type"] == "ocr"]
+        self.assertEqual(len(ocr_calls), 2)
+        self.assertTrue(all(call["response_model_name"] == "qwen3.5-ocr" for call in ocr_calls))
+        self.assertEqual(mock_ocr.call_count, 2)
 
     @patch("pipeline_runner.qwen_vl_image_understanding_client")
     def test_video_pipeline_uses_qwen_vl_on_extracted_keyframe(self, mock_vision) -> None:

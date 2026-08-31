@@ -170,6 +170,7 @@ def generate_batch_report(
     partial_success_files = sum(1 for result in results if result.get("processing_status") == "partial_success")
     failed_files = sum(1 for result in results if result.get("processing_status") == "failed")
     skipped_files = sum(1 for result in results if result.get("processing_status") == "skipped")
+    pending_files = sum(1 for result in results if result.get("processing_status") == "pending")
 
     runtime_costs = _cost_by_runtime_type(model_calls)
     billable_model_calls = [call for call in model_calls if _runtime_type_for_call(call) == "live_api"]
@@ -191,9 +192,11 @@ def generate_batch_report(
             "partial_success_files": partial_success_files,
             "failed_files": failed_files,
             "skipped_files": skipped_files,
+            "pending_files": pending_files,
             "success_rate": _rate(success_files, total_files),
             "failure_rate": _rate(failed_files, total_files),
             "partial_success_rate": _rate(partial_success_files, total_files),
+            "pending_rate": _rate(pending_files, total_files),
         },
         "cost_stats": {
             "budget_limit_cny": budget_limit_cny,

@@ -23,13 +23,16 @@
 - 文本主分类评估能生成评估模板、合并人工标准答案，并计算 Accuracy、Macro-F1 和分类级指标。
 - 主入口能在临时目录中跑通一次 mock 批处理。
 - 默认运行保持离线；PaddleOCR 单元测试使用替代引擎，不下载权重，DeepSeek、Qwen-VL 和 DashScope ASR 真实调用必须经过显式授权。
+- 延迟文本分析模式会保留证据、写出 `pending` 状态且不调用文本 API；文本重分析成功后会清除延迟标记。
+- 延迟模式在没有任何可用证据时会直接失败，不会制造无法完成的待处理记录。
+- Phase 2 门禁能检查同步后端对照、两阶段调用隔离、源批次关联和重复成功调用。
 
 ## 2. 当前已有测试数量
 
-当前测试目录共有 22 个测试文件。最近一次离线运行结果为：
+最近一次完整离线运行结果为：
 
 ```text
-Ran 277 tests
+Ran 349 tests
 
 OK
 ```
@@ -56,17 +59,17 @@ python .\src\offline_regression_check.py
 |---|---|---|
 | `test_file_loader.py` | `file_loader.py` | 文件类型识别、文件清单生成、文件级编号生成 |
 | `test_preprocessor.py` | `preprocessor.py` | 文本读取、图片路径处理、视频 V1 元信息读取、多关键帧等距抽取、OpenCV 中文路径写入兜底、ffmpeg 音频提取成功路径和缺少依赖状态输出 |
-| `test_model_router.py` | `model_router.py` | 路由规则读取、按任务类型选择模型、未知任务报错 |
+| `test_model_router.py` | `model_router.py` | 历史规则兼容、路由计划构造、媒体 pipeline 解析、真实 API 标记、fail 拒绝、配置指纹漂移拒绝、精简决策快照校验和 warning 伪装为 pass 的拒绝 |
 | `test_model_clients.py` | `model_clients.py` | mock客户端、PaddleOCR结果解析、Qwen-VL请求构造和响应解析、DashScope本地音频上传、DashScope ASR请求构造和转写结果解析、DeepSeek结构化响应和有限重试 |
 | `test_cost_latency_tracker.py` | `cost_latency_tracker.py` | 模型价格读取、价格目录元数据读取、按输入输出用量计算成本、模型调用记录生成 |
 | `test_price_catalog_updater.py` | `price_catalog_updater.py` | 官方价格页解析、候选价格报告生成、价格刷新预检查、`--apply` 写回本地价格目录、刷新报告写出；测试使用假网页，不访问网络 |
 | `test_cost_repricing.py` | `cost_repricing.py` | 历史批次成本重算、缺价格处理、批次文件读取、JSON/Markdown报告写出、字段说明渲染 |
-| `test_pipeline_runner.py` | `pipeline_runner.py` | 三条文件级流水线、图片本地 OCR 选择、Qwen-VL图片/关键帧视觉理解选择、调用记录、无文字结果、上游失败部分成功、低质量OCR闸门、视频 V1 多关键帧进入 mock / PaddleOCR / Qwen-VL 分支、音频提取成功后进入 mock 或 DashScope ASR 分支、缺少 URL 映射时自动上传本地音频、上传失败时不继续 ASR，以及视频完整理解未完成的边界 |
-| `test_result_writer.py` | `result_writer.py` | JSON、缩进式连续 JSON 对象、空记录文件、Markdown、人类可读结果、服务端响应模型名展示、视频预处理产物展示、模型调用明细和错误文件写入 |
+| `test_pipeline_runner.py` | `pipeline_runner.py` | 三条文件级流水线、路由计划在任务选择层覆盖旧参数、图片本地 OCR、Qwen-VL关键帧、调用记录、上游失败、低质量OCR闸门、视频多关键帧和 DashScope ASR 分支 |
+| `test_result_writer.py` | `result_writer.py` | JSON、标准单行 JSONL、空记录文件、Markdown、人类可读结果、服务端响应模型名展示、视频预处理产物展示、模型调用明细和错误文件写入 |
 | `test_report_generator.py` | `report_generator.py` | 批次成本、延迟、成功率和错误统计；验证标准单行 JSONL 与缩进式连续 JSON 对象均可读取 |
 | `test_model_strategy_advisor.py` | `model_strategy_advisor.py` | 成本汇总、历史成本与当前重算成本口径切换、延迟瓶颈识别、真实/mock 边界识别、字段缺失稳健处理、JSON 和 Markdown 报告生成 |
 | `test_routing_policy.py` | `model_catalog.py` / `routing_policy.py` | 模型目录聚合、策略约束判断、真实/mock 覆盖率、预算扩展模拟和配置读取 |
-| `test_routing_preflight.py` | `routing_preflight.py` | 运行前输入规模画像、历史延迟画像、真实API/本地运行/mock延迟拆分、延迟阻塞归因、价格目录画像、指定文件过滤、路由完整性检查、显式后端覆盖、预算约束、P95延迟约束、受控小样本试跑建议、mock与真实模型边界、缺价格稳健处理、JSON和Markdown报告写出 |
+| `test_routing_preflight.py` | `routing_preflight.py` | 运行前输入规模画像、历史延迟画像、预算和P95约束、受控试跑建议、mock边界、配置路由覆盖，以及报告附带路由计划时的独立 JSON 写出 |
 | `test_offline_regression_check.py` | `offline_regression_check.py` | 受保护离线回归入口、临时目录mock批处理、临时目录routing preflight冒烟检查、安全边界字段和CLI JSON输出 |
 | `test_cost_reconciliation.py` | `cost_reconciliation.py` | 多供应商成本分组、手工账单模板生成、单次调用级对账、时间段级对账、未填账单保持未验证、非法账单金额拒绝、重叠重复账单拒绝、mock和本地模型排除、账单来源与备注进入Markdown报告、JSON/Markdown报告写出 |
 | `test_strategy_simulator.py` | `strategy_simulator.py` | 基于已有批次生成路由策略模拟 JSON/Markdown 报告，验证缺字段时不会硬算 |
@@ -75,7 +78,11 @@ python .\src\offline_regression_check.py
 | `test_image_ocr_preprocessing_experiment.py` | `image_ocr_preprocessing_experiment.py` | 预处理图片生成、变体评估、基线对比、实验结论、OCR延迟拆分和JSON/Markdown报告写出；测试使用假OCR引擎，不运行真实PaddleOCR |
 | `test_ocr_backend_advisor.py` | `ocr_backend_advisor.py` | OCR后端候选排序、PaddleOCR不过闸门时的替代方案建议、RapidOCR已评估未通过时不重复推荐、隐私约束、缺失字段稳健处理、JSON/Markdown报告写出 |
 | `test_rapidocr_candidate_evaluator.py` | `rapidocr_candidate_evaluator.py` | RapidOCR候选依赖检查、依赖缺失安全跳过、假OCR客户端评估、常见返回结构解析、JSON/Markdown报告写出 |
-| `test_main.py` | `main.py` | mock批处理、缩进式 JSON 输出读取、评估输入隔离、指定文件筛选、批次后端组合元数据、PaddleOCR依赖预检、DeepSeek、Qwen-VL与DashScope ASR安全闸门、Qwen-VL重试参数传递，以及未显式选择的其他后端强制保持mock |
+| `test_main.py` | `main.py` | mock批处理、双层settings、路由计划生成与显式消费、外部候选证据接入、warning计划执行、未知候选/fail/配置漂移/参数冲突拒绝、真实API二次授权、批次路由快照，以及原有后端安全闸门 |
+
+Phase 4.2 专项执行 `python -m unittest tests.test_phase2_gate tests.test_model_router tests.test_main`，61项通过；完整离线测试执行 `python -m unittest discover -s tests`，365项通过。测试没有访问模型 API。
+
+Phase 4.3 离线实现专项覆盖 Qwen3.5-OCR 密钥缺失、原图请求、固定模型、合法/非法响应、token 与响应模型记录、图片流水线、视频多关键帧、路由计划、API二次授权和长ASCII碎片洪水拦截。完整离线测试执行 `python -m unittest discover -s tests`，375项通过；本轮测试没有访问真实 API。
 
 ## 4. 关键字段与测试作用
 
@@ -154,8 +161,8 @@ python .\src\offline_regression_check.py
 | `predicted_topic` | 模型预测的文本主分类，用来和人工答案对比 | 已测试能从结果文件中提取并写入评估模板 |
 | `gold_topic` | 人工标注的正确主分类，是计算准确率的基准 | 已测试能从人工标准答案表读取和合并 |
 | `accuracy` | 文本主分类准确率，计算方式为 `correct_count / evaluated_count` | 已测试正确样本数、缺标签样本和准确率计算 |
-| `valid_prediction_accuracy` | 有效九分类预测中的准确率，用于隔离分类判断能力 | 已测试缺少预测时不会把调用失败混成分类错误类型 |
-| `prediction_coverage` | 有效九分类预测占已评估样本的比例，用于观察调用和解析稳定性 | 已测试缺少预测和非法预测会降低覆盖率 |
+| `valid_prediction_accuracy` | 有效分类预测中的准确率，用于隔离分类判断能力 | 已测试缺少预测时不会把调用失败混成分类错误类型 |
+| `prediction_coverage` | 有效分类预测占已评估样本的比例，用于观察调用和解析稳定性 | 已测试缺少预测和非法预测会降低覆盖率 |
 | `macro_f1` | 各参与评估分类 F1 的简单平均，用来避免总体正确率掩盖小类别问题 | 已测试类别不均衡时能与 Accuracy 产生不同结果 |
 | `precision` | 预测为某分类的样本中真正属于该分类的比例，用于观察误报 | 已测试分类级 Precision 计算 |
 | `recall` | 人工标注为某分类的样本中被正确识别的比例，用于观察漏报 | 已测试分类级 Recall 计算 |
@@ -163,8 +170,9 @@ python .\src\offline_regression_check.py
 | `support` | 人工标准答案中属于某分类的样本数，用于判断分类证据量 | 已测试分类级样本数统计 |
 | `input_dir` | 本次批处理读取的输入目录，用来区分默认业务输入和评估样本输入 | 已测试命令行显式指定评估目录时只处理评估样本 |
 | `--include-files` | 本次只处理的文件名列表，用于受控评估少量图片，避免误跑整个输入目录 | 已测试只处理指定文件，且指定不存在文件时停止 |
-| `ocr_backend` | 图片或视频关键帧 OCR 后端配置，用来选择 mock 或本地 PaddleOCR | 已测试默认值为 mock，选择 PaddleOCR 时会预检本地依赖，视频无关键帧时不会误跑本地OCR |
-| `vision_understanding_backend` | 图片或视频关键帧视觉理解后端配置，用来选择 mock 或 Qwen-VL | 已测试默认值为 mock，选择 Qwen-VL 时必须显式授权真实 API |
+| `pipelines` | 分析主体配置，用来分别选择文本、图片、视频和音频链路的任务后端 | 已测试嵌套配置生效，文本与图片可在同一批次使用不同后端 |
+| `backends` | 模型主体配置，用来集中读取供应商、模型名、接口和生成限制 | 已测试 DeepSeek 与 Qwen-VL 嵌套参数会传入对应客户端，并兼容旧扁平配置 |
+| `selected_pipelines` | 批次实际媒体链路快照，用来复核各媒体类型采用的后端组合 | 已测试由运行时按输入媒体类型生成并写入批次元数据 |
 | `visual_description` | 图片或视频关键帧视觉理解输出的画面描述，用于补充 OCR 无法覆盖的视觉证据 | 已测试 Qwen-VL 成功时写入结果和证据链，失败时进入部分成功 |
 | `segment_id` | 图片内文字块的唯一编号，用于逐段关联人工正确文本和OCR结果 | 已测试同图重复编号会被拒绝 |
 | `exact_segment_recall` | 完整识别的必选业务文字块占比 | 已测试重复文字必须匹配不同OCR行 |
@@ -237,6 +245,10 @@ python .\src\offline_regression_check.py
 PaddleOCR 不使用 API Key。它必须显式选择 `paddleocr` 后端；程序会在生成批次输出前检查 PaddlePaddle 和 PaddleOCR 是否已安装。
 
 ## 8. 后续测试计划
+
+### 文本双后端离线测试
+
+当前离线测试覆盖 Qwen 文本后端在无 API Key 时请求前停止、固定请求模型、关闭思考模式、合法 JSON 与 token 用量解析、非法 JSON 拒绝、供应商返回模型记录，以及文本重分析只复用历史证据。第一轮真实对照另行验证了3次调用链路和P95延迟，但Qwen出现一次副分类边界错误，因此不能将离线测试或真实小样本解释为质量门槛通过。
 
 | 优先级 | 测试计划 | 类型 | 目的 |
 |---|---|---|---|

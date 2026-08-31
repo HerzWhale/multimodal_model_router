@@ -104,6 +104,26 @@ class ReportGeneratorTest(unittest.TestCase):
         self.assertEqual(report["error_quality_stats"]["total_errors"], 1)
         self.assertEqual(report["error_quality_stats"]["quality_flags_count"]["missing_audio"], 1)
 
+    def test_generate_batch_report_counts_pending_files(self) -> None:
+        report = generate_batch_report(
+            batch_id="batch_pending",
+            results=[
+                {"file_id": "file_001", "processing_status": "pending", "processing_time_ms": 10, "quality_flags": ["text_analysis_deferred"]},
+                {"file_id": "file_002", "processing_status": "success", "processing_time_ms": 20, "quality_flags": []},
+            ],
+            model_calls=[],
+            errors=[],
+            budget_limit_cny=10,
+            generated_at="2026-08-26T00:00:00+08:00",
+        )
+
+        stats = report["file_stats"]
+        self.assertEqual(stats["total_files"], 2)
+        self.assertEqual(stats["pending_files"], 1)
+        self.assertEqual(stats["pending_rate"], 0.5)
+        counted = sum(stats[key] for key in ["success_files", "partial_success_files", "failed_files", "skipped_files", "pending_files"])
+        self.assertEqual(counted, stats["total_files"])
+
     def test_generate_batch_report_from_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             batch_dir = Path(tmp_dir)

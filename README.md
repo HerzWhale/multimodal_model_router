@@ -4,14 +4,15 @@
 
 系统目标不是做一个单点内容分类器，而是把文本、图片、视频文件统一接入，拆成可追踪的处理任务，并记录模型调用、成本、延迟、证据来源和错误状态。它要解决的是 AI 团队在批量处理内容素材时常见的工程问题：输入不统一、输出不统一、模型调用过程不可追踪、成本和延迟难以复盘。
 
-当前版本必须诚实说明边界：DeepSeek 文本分析已经完成真实调用验证；图片 OCR 已接入本地 PaddleOCR，并用五张正式图片完成本地 CPU 推理与分段评估，其中 `img_7.jpg`、`img_8.jpg`、`img_9.jpg` 来自真实视频关键帧信息图。图片和视频关键帧视觉理解已支持受保护的 Qwen-VL API 入口，且完成过单图和视频关键帧真实验证；视频音频提取依赖本地 ffmpeg，真实语音识别可显式选择 DashScope ASR。默认后端仍保持 mock，必须显式选择真实后端并提供 `--allow-live-api` 才会访问外部 API。当前链路已满足一期 MVP 功能闭环，但 3 视频生产候选 SLA 预检查仍因 `text_analysis` P95 延迟 11567ms 高于 8000ms 目标而失败，因此不能宣传为生产 SLA 达标。
+当前版本必须诚实说明边界：DeepSeek 文本分析、PaddleOCR、Qwen-VL 视觉理解和 DashScope ASR 都有受控真实调用证据，但仍是小样本验证。Phase 4.3 已接入 `qwen_ocr`，但三图质量与延迟门槛未通过，因此图片和视频关键帧的默认 OCR 已恢复为 PaddleOCR；Qwen3.5-OCR 仅作为可显式选择的已评估候选。任何云后端都必须显式选择并提供 `--allow-live-api` 才会访问外部 API。
 
 ## 当前阶段状态
 
 | 阶段 | 结论 | 依据 | 下一步 |
 |---|---|---|---|
 | 一期：MVP 闭环 | 已结束 | 已跑通统一输入、文件分流、PaddleOCR、Qwen-VL、DashScope ASR、DeepSeek、模型调用记录、成本估算、延迟记录、错误记录和人工可读输出 | 不再继续把一期拖在样本复核里 |
-| 二期：真实链路稳定化 | 已启动 | `output/batch_video_compact_3files_regression_20260820/` 证明 3 视频文本重分析分类稳定，但 `output/preflight_video_compact_3files_regression_20260820/` 仍显示生产候选 SLA 未通过 | 优先做小批量真实链路稳定性、SLA 口径和成本对账收束 |
+| 二期：真实链路稳定化 | `COMPLETED` | 已实现文件式两阶段文本分析；第一阶段可写出待处理结果，第二阶段只调用文本分析并保留来源批次追踪 | 当前进入 Phase 3.1：统一最终结果质量评价与证据可信度门禁 |
+| Phase 4.3：Qwen3.5-OCR 接入 | `IN_PROGRESS` | 客户端、图片/视频共用路径、安全门禁和374项离线测试已完成；真实质量、延迟与成本证据未完成 | 等待授权运行3张图片，再决定是否进入1个视频验证 |
 
 字段说明：
 
@@ -22,6 +23,73 @@
 | `latency_ms` | 单次模型调用耗时，用于判断任务是否超过 SLA |
 | `topic` | 主分类，表示内容最主要的业务归属 |
 | `secondary_topics` | 副分类，表示内容涉及的交叉领域 |
+
+## 二期基准 gate
+
+二期不再靠口头判断是否出闸，使用配置文件和离线检查命令固定基准。
+
+```powershell
+python .\src\phase2_gate.py --config .\config\phase2_benchmark.yaml --output .\output\phase2_gate_current.json
+```
+
+这条命令只读取当前保留的 DeepSeek/Qwen 对照批次，不调用任何模型。当前结果为 `overall_status=warning`：证据完整，但没有同步候选同时通过质量和延迟硬门槛。
+
+| 检查项 | 当前值 | 标准 | 结论 |
+|---|---:|---:|---|
+| DeepSeek | 分类无回退 | P95 不高于 8000ms | 延迟未通过 |
+| Qwen | P95 6765ms | 主/副分类无回退 | `file_0007` 副分类未通过 |
+
+字段说明：
+
+| 字段 | 含义与作用 |
+|---|---|
+| `overall_status` | 二期 gate 总状态，用于判断当前是否达到二期出闸标准 |
+| `checks` | 逐项检查结果，用于定位样本、分类、成本、真实覆盖率或延迟问题 |
+| `selected_candidates` | 同时通过质量和延迟门槛的同步文本后端列表；当前为空 |
+| `text_analysis_p95_latency_ms` | 文本分析任务的 P95 延迟，用于判断 DeepSeek 文本层是否达到当前 SLA 标准 |
+
+## 文本分析两阶段执行
+
+当同步文本模型延迟不稳定时，可先保存上游证据，不在主流程调用文本 API：
+
+```powershell
+python .\src\main.py --input-dir .\input\sample_text --include-files ai_content_sample.txt --text-analysis-backend deepseek --defer-text-analysis --batch-id batch_deferred
+```
+
+第一阶段的 `processing_status` 为 `pending`，文本调用数为 0。第二阶段复用已有证据：
+
+```powershell
+python .\src\reanalyze_batch_text.py --source-batch-dir .\output\batch_deferred --batch-id batch_deferred_completed --text-analysis-backend deepseek --allow-live-api
+```
+
+第二条命令会调用真实 DeepSeek API，必须由用户显式执行。该方案是文件式两阶段执行，不是自动消息队列。
+
+| 字段 | 含义与作用 |
+|---|---|
+| `processing_status` | 文件处理状态；`pending` 表示证据已就绪但文本分析待执行 |
+| `source_batch_id` | 源批次编号，用于将最终结果追溯到第一阶段证据 |
+| `pending_files` | 批次中待文本分析的文件数，用于监控未完成工作量 |
+
+如果二期 gate 卡在 `text_analysis_p95_latency_ms`，继续运行文本分析延迟诊断：
+
+```powershell
+python .\src\text_analysis_latency_diagnosis.py --config .\config\phase2_benchmark.yaml
+```
+
+当前诊断报告：
+
+- JSON：[output/text_analysis_latency_diagnosis_current.json](output/text_analysis_latency_diagnosis_current.json)
+- Markdown：[output/text_analysis_latency_diagnosis_current.md](output/text_analysis_latency_diagnosis_current.md)
+
+当前结论：输出收紧并不稳定。上一批一度把 3 视频基准的 `text_analysis` P95 降到 8653ms，但复测批次中 `例子.mp4` 和 `例子1.mp4` 分别达到 12262ms、12999ms，当前 gate 以最新复测的 12999ms 为准。两个慢调用的 `output_tokens` 分别为 1378 和 1517，说明 DeepSeek 仍可能生成接近输出上限的长 JSON；下一步不应继续盲目改 prompt，应做文本模型对照或改成异步 SLA 口径。
+
+字段说明：
+
+| 字段 | 含义与作用 |
+|---|---|
+| `input_tokens` | 输入 token 数，用于判断是否是输入证据过长造成慢调用 |
+| `output_tokens` | 输出 token 数，用于判断是否是模型生成内容过长造成慢调用 |
+| `risk_flags` | 机器可读风险标签，用于标记慢调用更像输入过长、输出过长还是外部 API 波动 |
 
 ## 1. 项目定位
 
@@ -53,6 +121,7 @@
 | 模型组合策略报告 | 已实现离线分析 | 基于已有批次解释成本、延迟、真实 / mock 边界和模型组合建议 |
 | 路由策略模拟 | 已实现离线分析 | 模拟成本优先、延迟优先、质量优先和平衡策略 |
 | 路由策略预检查 | 已实现离线检查 | 批处理前读取路由、价格、价格目录新鲜度、输入规模和历史调用记录，检查路由完整性、预算、任务级P95延迟、真实模型覆盖率和mock边界；当存在硬阻塞或风险提示时，会给出受控小样本试跑建议；不自动改路由，不触发模型调用 |
+| 二期基准 gate | 已实现离线检查 | 读取固定基准批次、人工确认分类和生产候选预检查报告，判断二期真实链路稳定化是否达到当前出闸标准 |
 | 多供应商成本对账 | 已实现离线对账 | 基于 `model_calls.jsonl` 生成手工账单模板，并把系统估算成本与供应商实际扣费做统一格式对比；首版不接平台账单 API |
 | 文本主分类评估 | 已完成提示词回归评估 | 18条无答案提示样本的端到端 Accuracy 为94.44%、Macro-F1 为96.30%；17条有效预测全部正确，1条因响应解析失败没有分类结果 |
 | 图片 OCR 评估 | 已实现五图分段评估和批次级闸门 | `img_1.png`、`img_2.png`、`img_7.jpg`、`img_8.jpg`、`img_9.jpg` 共151段人工业务文字；本轮三张关键帧图片整体完整段落召回率78.05%、字符错误率11.01%，批次级闸门结论为未通过 |
@@ -215,7 +284,26 @@ python .\src\main.py --input-dir .\input\sample_videos --include-files 例子.mp
 python .\src\main.py --preflight-only --input-dir .\input\sample_videos --include-files "例子.mp4,例子1.mp4,例子2.mp4,例子3.mp4" --ocr-backend paddleocr --vision-backend qwen_vl --speech-backend dashscope_asr --text-analysis-backend deepseek --historical-model-calls .\output\batch_video_evidence_gate_check_retry\model_calls.jsonl --batch-id preflight_video_full_real_current
 ```
 
-这条命令只读取本地配置、输入目录和已有历史调用记录，不执行正式批处理，不触发 DeepSeek、Qwen-VL、DashScope ASR 或 PaddleOCR，也不产生费用。它会生成 `routing_preflight_report.json` 和 `routing_preflight_report.md`，用于说明当前路线在运行前是否存在路由缺口、mock 边界、预算风险和 P95 延迟风险。
+这条命令只读取本地配置、输入目录和已有历史调用记录，不执行正式批处理，不触发 DeepSeek、Qwen-VL、DashScope ASR 或 PaddleOCR，也不产生费用。它会生成 `routing_preflight_report.json`、`routing_preflight_report.md` 和 `route_plan.json`。前两者解释路由缺口、mock 边界、预算风险和 P95 延迟风险；`route_plan.json` 保存本次可审查的媒体处理链与模型快照。
+
+只有显式传入路由计划，主流程才会执行该计划：
+
+```powershell
+python .\src\main.py --input-dir .\input --include-files img_1.png --route-plan .\output\preflight_phase4_1_route_plan\route_plan.json --batch-id batch_phase4_1_route_plan_offline
+```
+
+预检查状态为 `fail` 的计划会被拒绝；`warning` 计划允许在显式传入后受控执行，并保留风险说明。路由计划不能与四类后端覆盖参数同时使用，也不能替代 `--allow-live-api`：计划包含 DeepSeek、Qwen-VL 或 DashScope ASR 时，缺少真实 API 授权仍会在网络请求前停止。当前实现是“显式可执行路由计划”，不是按实时质量或延迟自动切换模型的动态调度器。
+
+已有文本后端对照证据可以先生成确定的候选建议，再把精简后的决策快照接入同一份路由计划：
+
+```powershell
+python .\src\phase2_gate.py --config .\config\phase2_benchmark.yaml --output .\output\phase4_2_text_route_decision.json
+python .\src\main.py --preflight-only --route-decision-report .\output\phase4_2_text_route_decision.json --input-dir .\input --include-files img_1.png --ocr-backend paddleocr --vision-backend qwen_vl --preflight-policy production_sla --batch-id preflight_phase4_2_evidence_route_plan
+```
+
+`selected_candidates` 只保留质量、延迟等硬门槛全部通过的候选；没有候选全通过时，`recommended_candidate` 按“质量、延迟、估算成本”的固定顺序给出 warning 候选，同时用 `unmet_constraints` 披露未满足约束。当前历史证据推荐 DeepSeek，但其文本分析 P95 为 10702ms，超过 8000ms 门槛，因此不能描述为合格后端。OCR、视觉理解和语音识别没有参与本轮候选比较，继续使用显式配置。完整候选指标保留在外部决策报告中，路由计划只保存执行所需的审计快照。
+
+受控真实批次 `output/batch_phase4_2_evidence_route_plan_live/` 已验证该 warning 计划可执行：PaddleOCR、Qwen-VL、DeepSeek三次调用全部成功且与计划一致。单次DeepSeek延迟为2885ms，但不能覆盖历史P95结论；估算总成本0.003435元尚未与供应商账单对账。
 
 当前 `output/preflight_video_full_real_current/` 的报告基于 4 个视频样本和 `output/batch_video_evidence_gate_check_retry/model_calls.jsonl` 生成。预检查结果为 `warning`：当前路线没有 mock 覆盖问题，任务级 P95 延迟在受控试跑目标内，但预算上限未显式提供、部分价格目录需要刷新、语音识别成本仍缺少音频秒数估算。这里的 `warning` 表示可以继续受控试跑，不等于生产 SLA 达标。
 
@@ -235,19 +323,19 @@ python .\src\main.py --preflight-only --preflight-policy production_sla --input-
 
 每次重试都会生成独立模型调用记录并分别计入成本和延迟。该参数当前适用于 DeepSeek 文本分析和 Qwen-VL 视觉理解；鉴权失败、权限错误和参数错误不会重试。不要在未确认输入范围和费用前启用该参数。
 
-如果 DeepSeek 文本层因为输出过长出现空响应或命中输出上限，可以优先调高 `config/settings.yaml` 中的 `deepseek_max_tokens`，或只在重分析命令中临时指定：
+如果 DeepSeek 文本层因为输出过长出现空响应或命中输出上限，可以临时调高 `config/settings.yaml` 中的 `backends.text_analysis.deepseek.max_tokens`，或只在重分析命令中临时指定：
 
 ```powershell
 python .\src\reanalyze_batch_text.py --source-batch-dir .\output\历史批次 --batch-id batch_text_reanalysis_retry --include-files 文件名.mp4 --allow-live-api --max-api-retries 1 --deepseek-max-tokens 3000
 ```
 
-`deepseek_max_tokens` 只控制 DeepSeek 文本分析单次输出 token 上限；`qwen_vl_max_tokens` 只控制 Qwen-VL 视觉描述单次输出 token 上限。二者越大，越可能减少截断，但也可能增加成本和延迟；它们不是质量评分。
+`backends.text_analysis.deepseek.max_tokens` 只控制 DeepSeek 文本分析单次输出 token 上限；当前默认值为 1600，用于在避免 1000 token 截断风险的同时减少过大的输出窗口。`backends.vision_understanding.qwen_vl.max_tokens` 只控制 Qwen-VL 视觉描述单次输出 token 上限。二者越大，越可能减少截断，但也可能增加成本和延迟；它们不是质量评分。
 
-`deepseek_compact_mode` 控制 DeepSeek 文本分析是否首发使用短输出模式。开启后系统会复用已有 compact 提示词，把 `summary` 控制在 80 字以内、`business_use` 控制在 40 字以内，并压缩送入模型的证据副本。它用于降低文本分析延迟风险；原始证据仍保留在输出文件中，不能把它解释为质量提升。
+`backends.text_analysis.deepseek.compact_mode` 控制 DeepSeek 文本分析是否首发使用短输出模式。开启后系统会复用已有 compact 提示词，把 `summary` 控制在 80 字以内、`business_use` 控制在 30 字以内，并压缩送入模型的证据副本。它用于降低文本分析延迟风险；原始证据仍保留在输出文件中，不能把它解释为质量提升。
 
-`qwen_vl_max_image_side` 控制发送给 Qwen-VL 的图片请求副本最长边，默认 960 像素。它只压缩 API 请求中的 Base64 图片，不修改本地原图、不影响 PaddleOCR 使用的原始图片；作用是降低单帧视觉理解的网络传输和模型处理延迟风险。该参数只能通过 `config/settings.yaml` 调整，是否真正降低 P95 延迟仍需要小批量真实复测验证。
+`backends.vision_understanding.qwen_vl.max_image_side` 控制发送给 Qwen-VL 的图片请求副本最长边，默认 960 像素。它只压缩 API 请求中的 Base64 图片，不修改本地原图、不影响 PaddleOCR 使用的原始图片；作用是降低单帧视觉理解的网络传输和模型处理延迟风险。该参数只能通过 `config/settings.yaml` 调整，是否真正降低 P95 延迟仍需要小批量真实复测验证。
 
-`text_analysis_evidence_char_limit` 控制送入文本分析模型的证据字符上限，用于降低视频证据过长带来的文本分析延迟风险。它只裁剪模型输入副本，不裁剪输出文件中的原始 `raw_text`、`ocr_text`、`audio_transcript` 和 `visual_description`。如果发生裁剪，结果会写入 `quality_flags=text_analysis_evidence_truncated` 和对应 `warning_messages`，便于负责人判断结果是否需要人工复核。该配置是延迟风险控制手段，不代表当前链路已经通过生产 SLA。
+`backends.text_analysis.deepseek.evidence_char_limit` 控制送入文本分析模型的证据字符上限，用于降低视频证据过长带来的文本分析延迟风险。它只裁剪模型输入副本，不裁剪输出文件中的原始 `raw_text`、`ocr_text`、`audio_transcript` 和 `visual_description`。如果发生裁剪，结果会写入 `quality_flags=text_analysis_evidence_truncated` 和对应 `warning_messages`，便于负责人判断结果是否需要人工复核。该配置是延迟风险控制手段，不代表当前链路已经通过生产 SLA。
 
 默认情况下，主流程读取 `input/`，也就是普通业务输入样例。`evaluation/` 是评估样本目录，不会被默认批处理自动读取。
 
@@ -264,15 +352,17 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 | 参数 / 配置 | 含义与作用 |
 |---|---|
 | `config/runtime_policy.yaml` | 运行策略配置文件，用于集中管理文件类型白名单、后端白名单、视频预处理参数、OCR质量闸门、topic体系和DeepSeek提示词 |
-| `config/settings.yaml` | 运行环境配置文件，用于管理输入输出目录、默认后端、API地址、模型名、token上限和预算 |
-| `ocr_backend` | 图片或视频关键帧 OCR 后端配置；默认使用 mock，显式设为 `paddleocr` 时才运行本地 PaddleOCR |
-| `vision_understanding_backend` | 图片或视频关键帧视觉理解后端配置；默认使用 mock，显式设为 `qwen_vl` 时才准备调用 Qwen-VL API |
-| `text_analysis_backend` | 文本分析后端配置，用来决定使用 mock 还是 DeepSeek |
-| `deepseek_max_tokens` | DeepSeek 文本分析单次输出 token 上限，用于减少长证据合并时被截断导致的空响应风险 |
-| `deepseek_compact_mode` | DeepSeek 文本分析短输出模式开关，用于减少首发请求证据和输出负担；默认开启以降低视频文本分析延迟风险 |
-| `text_analysis_evidence_char_limit` | 文本分析输入证据字符上限，用于控制送入文本分析模型的证据长度；原始证据仍保留在结果文件中 |
-| `qwen_vl_max_tokens` | Qwen-VL 视觉理解单次输出 token 上限，用于控制画面描述长度、成本和延迟 |
-| `qwen_vl_max_image_side` | Qwen-VL 请求图片副本的最长边上限，用于降低视觉理解请求体积和延迟风险；不修改本地原图 |
+| `config/settings.yaml` | 运行环境配置文件；`pipelines` 按文本、图片、视频、音频选择处理后端，`backends` 维护具体模型参数 |
+| `pipelines` | 分析主体配置；决定每类输入实际经过哪些 OCR、视觉、ASR 和文本分析后端 |
+| `backends` | 模型主体配置；集中保存供应商、模型名、密钥环境变量、接口地址和生成限制 |
+| `pipelines.image.ocr` / `pipelines.video.keyframe_ocr` | 分别选择图片 OCR 与视频关键帧 OCR 后端，默认使用 mock |
+| `pipelines.image.vision_understanding` / `pipelines.video.keyframe_vision_understanding` | 分别选择图片与视频关键帧视觉理解后端 |
+| `pipelines.*.text_analysis` | 为对应媒体类型选择文本分析后端，可使用 mock、DeepSeek 或 Qwen 文本后端 |
+| `backends.text_analysis.deepseek.max_tokens` | DeepSeek 文本分析单次输出 token 上限，用于减少长证据被截断导致的空响应风险 |
+| `backends.text_analysis.deepseek.compact_mode` | DeepSeek 短输出模式开关，用于减少请求证据和输出负担 |
+| `backends.text_analysis.deepseek.evidence_char_limit` | 文本分析输入证据字符上限；只裁剪请求副本，不修改保存的原始证据 |
+| `backends.vision_understanding.qwen_vl.max_tokens` | Qwen-VL 视觉描述单次输出 token 上限 |
+| `backends.vision_understanding.qwen_vl.max_image_side` | Qwen-VL 请求图片副本最长边上限；不修改本地原图 |
 | `--vision-backend` | 命令行视觉理解后端选择，用于在小样本图片或视频关键帧上显式启用 Qwen-VL |
 | `--allow-live-api` | 真实 API 调用授权开关，用来防止 DeepSeek 或 Qwen-VL 外部请求和费用被配置文件或默认命令误触发 |
 | `--max-api-retries` | 可重试API错误的最大重试次数；默认0，只能显式设为1 |
@@ -415,13 +505,13 @@ output/batch_20260718_150348/
 
 该批次包含 3 个输入文件：1 个文本、1 个图片、1 个视频。本批次能证明统一输入、统一输出、调用记录、成本延迟追踪和 DeepSeek 文本分析链路跑通；不能证明图片 / 视频真实理解质量。
 
-当前九类规则回归批次：
+当前 11 类规则回归批次：
 
 ```text
 output/batch_text_eval_20260722_135443/
 ```
 
-该批次在九类定义和判断顺序补齐后，对同一组18条文本进行了18次 DeepSeek 真实分析。17条获得有效九分类结果且全部正确，1条因模型响应无法解析为JSON而失败。端到端 Accuracy 为94.44%，有效预测 Accuracy 为100.00%，预测覆盖率为94.44%，Macro-F1 为96.30%；总成本为0.027852元，平均模型延迟为4356.78ms，P95模型延迟为10955ms。成本仅占50元预算上限约0.0557%，但 P95 延迟仍高于文本任务原定2000ms上限。
+该历史批次在原 9 类定义和判断顺序补齐后，对同一组18条文本进行了18次 DeepSeek 真实分析。后续项目已扩展为 11 类体系，新增 `gaming` 和 `humor`，因此该历史批次只能作为旧分类体系的回归证据。17条获得有效分类结果且全部正确，1条因模型响应无法解析为JSON而失败。端到端 Accuracy 为94.44%，有效预测 Accuracy 为100.00%，预测覆盖率为94.44%，Macro-F1 为96.30%；总成本为0.027852元，平均模型延迟为4356.78ms，P95模型延迟为10955ms。成本仅占50元预算上限约0.0557%，但 P95 延迟仍高于文本任务原定2000ms上限。
 
 修改前的4条错例在本轮都已正确分类，`other` 类 Recall 从0提升到100%。但是原先正确的第14条体育健康样本没有获得预测结果，因此严格的端到端回归闸门尚未完全通过。详细结果见 `output/batch_text_eval_20260722_135443/text_topic_eval_interpretation.md`。本轮复用了参与规则修正的已知样本，只能作为回归证据，不能证明对新内容的泛化能力。
 
@@ -450,8 +540,8 @@ output/batch_failure_demo_20260721_190052/
 | `warning_messages` | 面向使用者的风险提示，用于解释为什么结果不能被当成完全可靠 |
 | `failed` | 失败状态，表示关键步骤失败，无法产出有效最终结果 |
 | `accuracy` | 文本主分类准确率，计算方式为正确样本数除以已评估样本数 |
-| `valid_prediction_accuracy` | 仅在有效九分类预测中的准确率，用于把分类判断能力和调用可用性分开观察 |
-| `prediction_coverage` | 有效九分类预测数占已评估样本数的比例，用于衡量调用和结构解析稳定性 |
+| `valid_prediction_accuracy` | 仅在有效分类预测中的准确率，用于把分类判断能力和调用可用性分开观察 |
+| `prediction_coverage` | 有效分类预测数占已评估样本数的比例，用于衡量调用和结构解析稳定性 |
 | `macro_f1` | 各参与评估分类 F1 的简单平均，用来避免总体正确率掩盖小类别问题 |
 | `support` | 某分类的人工标准答案样本数，用来判断该分类评估证据量 |
 
@@ -460,10 +550,10 @@ output/batch_failure_demo_20260721_190052/
 | 输出文件 | 作用 |
 |---|---|
 | `batch_metadata.json` | 记录批次编号、创建时间、预算上限、输出格式、选定后端、实际真实 / 本地 / mock 后端组合和成本估算口径 |
-| `results.jsonl` | 保存每个文件的最终结构化结果；新生成文件采用缩进式连续 JSON 对象，每个字段独立换行，便于人工检查 |
+| `results.jsonl` | 保存每个文件的最终结构化结果；新生成文件采用标准 JSONL，每个物理行是一条完整记录 |
 | `results_readable.md` | 保存人工可读结果，便于检查每个文件的分类、摘要、证据、成本、耗时、请求模型名和服务端响应模型名 |
-| `model_calls.jsonl` | 保存每次模型调用的任务类型、供应商、模型名、用量、成本、延迟和状态；新生成文件每个字段独立换行 |
-| `errors.jsonl` | 保存失败或部分成功时的问题；新生成文件每个字段独立换行，便于程序解析和排查 |
+| `model_calls.jsonl` | 保存每次模型调用的任务类型、供应商、模型名、用量、成本、延迟和状态；新生成文件每行一条调用记录 |
+| `errors.jsonl` | 保存失败或部分成功时的问题；新生成文件每行一条错误记录，便于逐行解析 |
 | `batch_report.json` | 汇总整个批次的文件数、成功率、成本、延迟和质量风险 |
 | `model_strategy_report.md` / `model_strategy_report.json` | 基于已有批次生成模型组合策略分析 |
 | `routing_policy_simulation.md` / `routing_policy_simulation.json` | 基于已有批次模拟不同路由策略下的取舍 |
@@ -481,7 +571,7 @@ output/batch_failure_demo_20260721_190052/
 | `rapidocr_candidate_eval.md` / `rapidocr_candidate_eval.json` | 保存 RapidOCR 候选评估结果；当前已完成三张关键帧本地实测，整体完整段落召回率82.93%、字符错误率10.64%、P95延迟4294ms，闸门结论为未通过 |
 | `failure_demo_interpretation.md` | 解释失败 / 部分成功演示批次中的错误链路和证据缺失 |
 
-机器读取应使用三个 `.jsonl` 文件；人工逐项检查应优先使用 `results_readable.md`。从本版本开始，新批次的 `results.jsonl`、`model_calls.jsonl` 和 `errors.jsonl` 也采用缩进式连续 JSON 对象，让每个输出字段独立换行。它不是严格“一条记录一行”的标准 JSONL，但项目内部读取器已兼容这种格式。已有历史批次不会被自动改写。
+机器读取应使用三个 `.jsonl` 文件；人工逐项检查应优先使用 `results_readable.md`。从本版本开始，新批次的 `results.jsonl`、`model_calls.jsonl` 和 `errors.jsonl` 采用标准 JSONL，每个物理行是一条完整 JSON 记录。项目内部读取器继续兼容历史缩进式连续 JSON 对象，但已有历史批次不会被自动改写。
 
 ## 7. 成本与延迟统计
 
@@ -576,6 +666,12 @@ python .\src\model_strategy_advisor.py .\output\batch_qwen_vl_response_model_che
 
 ## 10. 当前限制
 
+### 二期文本后端对照（离线能力已就绪，真实结果待验证）
+
+`src/reanalyze_batch_text.py` 现在可复用历史批次中的 OCR、视觉描述和音频转写，只重跑文本分析，并显式选择 DeepSeek 或固定版本 `qwen-plus-2025-12-01`。该入口不会重新调用 OCR、视觉理解或 ASR。
+
+第一轮真实对照已经完成：DeepSeek 三条分类均符合人工答案，但文本分析 P95 为10702ms；Qwen 文本分析 P95 为6765ms，但技术评测视频错误增加了 `gaming` 副分类。没有后端同时通过质量和8000ms延迟硬门槛，因此未运行第二轮，也没有把Qwen接入主批处理流程。该结论只适用于当前三文件小样本。
+
 - 真实模型证据当前覆盖 DeepSeek 文本分析和 PaddleOCR 图片文字提取；PaddleOCR 已完成五张正式图片、共151段人工业务文字评估，但样本量仍不能外推为生产质量。
 - 图片 OCR 默认仍为 mock，只有显式选择时才使用本地 PaddleOCR；图片视觉理解默认仍为 mock，已支持显式选择 Qwen-VL API，并已有 `img_1.png` 单图真实批次证据；视频预处理V1已能读取元信息，默认按 `start_early_then_spaced` 抽取最多3张关键帧，关键帧已能按配置进入 PaddleOCR 或 Qwen-VL，本地音频提取依赖 ffmpeg；`.flv` 已纳入视频输入识别。
 - 当前 Qwen-VL 证据只覆盖单张图片的 `visual_description`，不能证明多图稳定质量。该批次中的 OCR 和文本分析仍是 mock，因此不能作为完整图片理解质量结论。
@@ -586,10 +682,10 @@ python .\src\model_strategy_advisor.py .\output\batch_qwen_vl_response_model_che
 - `img_9.jpg` 的延迟拆分已完成：引擎创建耗时8834ms，首次图片推理60373ms，热启动第二次图片推理56042ms，图片解码和结果解析都不是主要瓶颈；即使不计引擎创建，本地CPU单图推理仍远高于2秒目标。
 - RapidOCR 候选评估已经完成：三张关键帧整体完整段落召回率82.93%、字符错误率10.64%、P95延迟4294ms，虽然明显快于当前 PaddleOCR CPU 批次，但仍未达到90%召回、5%字符错误率和2秒P95延迟目标，因此不接入主流程。
 - OCR 后端取舍判断已经更新：当前信号仍为 `evaluate_alternative_backends`，但 RapidOCR 已被标记为 `evaluated_not_passed`；如继续追求生产可用 OCR，只能在单独授权后小样本评估服务化 OCR，否则保留 PaddleOCR 作为当前本地基线。
-- 运行时模型路由仍按任务类型固定选择模型；离线路由策略模拟和路由策略预检查已经实现，但它们都不会自动改写运行时调度。预检查中的受控试跑建议只给出缩小范围和安全命令，不等于动态路由；其中 mock 任务的延迟只会进入非阻塞风险解释，不能被当成真实模型性能通过。
+- 路由预检查现在会从 `settings.yaml` 生成可执行 `route_plan.json`，主流程可在用户显式传入后按计划运行，并把计划快照写入批次元数据；旧 `routing_rules.yaml` 只保留历史兼容。系统仍不会根据实时质量、成本或延迟自动切换模型，因此不能把它描述为全自动动态路由；mock 延迟也不能被当成真实供应商性能。
 - 多供应商成本对账层已经实现；当前 Qwen-VL 单图批次已填入供应商后台 0.00 元真实扣费，因此 Qwen-VL 对账项的成本可信度已进入 `period_level_reconciled`。本次对账结论不是“估算准确”，而是“系统已经能记录理论估算成本、实际扣费和差异原因”；免费额度只是这一次样例的差异原因，不代表生产环境常态。
 - 视频 V1 当前证明本地预处理链路：能解析元信息、默认写出最多3张前段优先关键帧并把预处理产物写入结果；本机有 ffmpeg 时可抽取 wav 音频文件。代码已支持把关键帧送入 PaddleOCR 或 Qwen-VL，并已跑过小批量真实视频链路；但样本量仍不足以证明生产级完整视频OCR、完整视频视觉理解或真实语音识别质量。
-- 九类规则回归仍只有18条已知样本、每类2条，不能外推为线上稳定质量或泛化能力。
+- 历史 9 类规则回归仍只有18条已知样本、每类2条；当前 11 类体系已有视频边界样本，但样本量仍不能外推为线上稳定质量或泛化能力。
 - 回归批次当时有1条调用没有产出可解析JSON；结构化响应加固后已对该样本完成一次真实定向验证并成功，但重试分支只完成离线故障测试。
 - 本轮 P95 模型延迟为10955ms，没有达到文本任务2秒以内的既定目标。
 - `other` 分类在本轮两条样本均正确，但这只证明已知回归样本得到改善，不能证明新样本上的稳定召回。
@@ -636,3 +732,9 @@ python .\src\model_strategy_advisor.py .\output\batch_qwen_vl_response_model_che
 当前文件扫描入口会按后缀把输入文件识别为文本、图片或视频。文本类支持 `.txt`、`.text`、`.md`、`.csv`、`.tsv`、`.json`、`.jsonl`、`.yaml`、`.yml`、`.xml`、`.html`、`.htm`、`.srt`、`.vtt`、`.log`；图片类支持 `.jpg`、`.jpeg`、`.png`、`.bmp`、`.webp`、`.jfif`、`.tif`、`.tiff`；视频类支持 `.mp4`、`.mov`、`.avi`、`.mkv`、`.webm`、`.flv`、`.m4v`、`.wmv`、`.mpg`、`.mpeg`、`.3gp`、`.3g2`、`.mts`、`.m2ts`、`.ts`。
 
 这里的“支持”只表示文件会进入对应流水线；文本仍按 UTF-8 读取，图片仍依赖当前 OCR / 视觉理解后端能否实际解码，视频仍依赖 OpenCV 和 ffmpeg 能否解析。PDF、Word、HEIC 和 GIF 动图暂不纳入，避免只靠后缀放行但主流程无法稳定处理。
+## Phase 4.3：Qwen3.5-OCR（离线实现完成，真实验证待授权）
+
+- `config/settings.yaml` 保持 PaddleOCR 为图片与视频关键帧默认OCR；`qwen_ocr`已接入，可通过 `--ocr-backend qwen_ocr --allow-live-api`显式选择。
+- `qwen_ocr` 固定请求 `qwen3.5-ocr`，默认发送原图；`max_image_side` 留空表示不缩放，也可在配置中填写正整数限制最长边。
+- 云 OCR 必须同时显式选择 `--ocr-backend qwen_ocr` 和 `--allow-live-api`，且必须存在 `DASHSCOPE_API_KEY`；任一条件缺失都会在网络请求前停止。
+- 三张图片真实调用已完成，但整体质量和延迟闸门未通过；视频真实验证因此暂缓，不能宣称Qwen3.5-OCR优于PaddleOCR。

@@ -194,7 +194,7 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 
 本批次中文本文件的文本分析由 DeepSeek 真实生成。图片和视频结果需要如实按工程链路解读：OCR、视觉理解、语音识别仍是 mock，因此不能把这部分说成真实识别效果。
 
-机器处理时应读取 `results.jsonl`：它保存文件级结构化记录。从当前版本起，新批次中的 JSON 对象采用缩进式连续写法，每个输出字段独立换行，人工查看时不会挤在一行。新版 `results_readable.md` 会在“使用模型”里显示 `response_model_name`；历史批次不会自动改写。项目读取器兼容这种缩进式连续 JSON 对象，但它不是严格“一条记录一行”的标准 JSONL。
+机器处理时应读取 `results.jsonl`：它保存文件级结构化记录。从当前版本起，新批次采用标准 JSONL，每个物理行是一条完整 JSON 记录。人工查看应使用 `results_readable.md`，其中“使用模型”会显示服务端响应模型；历史批次不会自动改写，项目读取器仍兼容旧的缩进式连续 JSON 对象。
 
 ## 3.1 `batch_metadata.json` 怎么读
 
@@ -237,7 +237,7 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 
 ## 5. `model_calls.jsonl` 怎么读
 
-`model_calls.jsonl` 是模型调用明细。每一个 JSON 对象表示一次模型调用；新批次采用缩进式连续 JSON 对象，每个调用字段独立换行，项目内部读取器可解析，但普通“逐行 JSONL”工具可能无法直接读取。
+`model_calls.jsonl` 是模型调用明细。每个物理行表示一次完整模型调用，可直接由普通逐行 JSONL 工具读取。
 
 当前多模态批次共有 8 次调用：
 
@@ -444,7 +444,7 @@ output/batch_text_eval_20260722_135443
 | 正确数 | 17 | 按全部18条统计，模型主分类与人工主分类一致的数量 |
 | 端到端 Accuracy | 94.44% | 无有效预测按未命中计算 |
 | 有效预测 Accuracy | 100.00% | 17条有效预测全部分类正确 |
-| 预测覆盖率 | 94.44% | 有效九分类预测占全部已标注样本的比例 |
+| 预测覆盖率 | 94.44% | 有效分类预测占全部已标注样本的比例 |
 | Macro-F1 | 96.30% | 9个业务分类的F1等权平均 |
 | 总成本 | 0.027852 元 | 本批次18次 DeepSeek 文本分析的实际记录成本 |
 | 平均模型延迟 | 4356.78 ms | 18次真实模型调用的平均耗时 |
@@ -462,8 +462,8 @@ output/batch_text_eval_20260722_135443
 | `evaluated_count` | 已纳入评估的文本样本数，用来判断准确率的样本基础 |
 | `correct_count` | 预测主分类与人工主分类一致的样本数 |
 | `accuracy` | 文本主分类准确率，计算方式为 `correct_count / evaluated_count` |
-| `valid_prediction_accuracy` | 有效九分类预测中的准确率，用来把分类判断和调用失败分开观察 |
-| `prediction_coverage` | 有效九分类预测占已评估样本的比例，用来观察调用和解析稳定性 |
+| `valid_prediction_accuracy` | 有效分类预测中的准确率，用来把分类判断和调用失败分开观察 |
+| `prediction_coverage` | 有效分类预测占已评估样本的比例，用来观察调用和解析稳定性 |
 | `missing_prediction_count` | 没有产出有效主分类的样本数，用来定位调用或解析失败 |
 | `macro_f1` | 各参与评估分类 F1 的简单平均，用于避免总体正确率掩盖小类别问题 |
 | `precision` | 预测为某个分类的样本中实际属于该分类的比例，用于观察误报 |

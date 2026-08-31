@@ -14,6 +14,7 @@ from typing import Any
 
 
 MISSING_VALUE_TEXT = "当前数据未提供"
+VALID_TOPIC_LABEL = "11类"
 
 VALID_TOPIC_VALUES = {
     "news",
@@ -252,6 +253,7 @@ def evaluate_topic_metrics(annotation_rows: list[dict[str, str]]) -> dict[str, A
         if has_video_evidence:
             for field_name in VIDEO_EVIDENCE_FIELDS:
                 detail[field_name] = row.get(field_name, "")
+            detail.update(_assess_video_result_quality(detail))
         evaluated_details.append(detail)
 
     evaluated_count = len(evaluated_details)
@@ -297,19 +299,30 @@ def evaluate_topic_metrics(annotation_rows: list[dict[str, str]]) -> dict[str, A
         "support": "人工标准答案中属于某分类的样本数，用于判断该分类证据量。",
         "evaluated_labels": "人工标签或模型预测中实际出现的分类，用于说明本次指标覆盖范围。",
         "evaluated_count": "已经填写 gold_topic 并纳入统计的文本样本数。",
-        "valid_prediction_count": "成功产出九类范围内 predicted_topic 的样本数。",
+        "valid_prediction_count": f"成功产出{VALID_TOPIC_LABEL}范围内 predicted_topic 的样本数。",
         "missing_prediction_count": "没有产出 predicted_topic 的已标注样本数，常用于识别调用或解析失败。",
-        "invalid_prediction_count": "产出了内容但不属于九类允许值的样本数，用于发现输出约束失效。",
+        "invalid_prediction_count": f"产出了内容但不属于{VALID_TOPIC_LABEL}允许值的样本数，用于发现输出约束失效。",
     }
     if has_video_evidence:
+        quality_gate_summary = _summarize_quality_gate(evaluated_details)
         field_notes.update(
             {
                 "processing_status": "文件级处理状态，用于区分该视频是成功、部分成功还是失败。",
                 "quality_flags": "机器可读的质量风险标签，用于定位 OCR、视觉理解、语音识别或证据稳定性问题。",
                 "video_evidence_stability": "视频证据稳定性判断，用于说明关键帧数量和前段证据是否足以支撑分类。",
                 "video_evidence_risk_reasons": "视频证据不稳定的具体原因，用于解释分类错误可能来自抽帧证据不足而不是文本模型判断错误。",
+                "result_quality_gate_status": "单条视频结果质量门禁状态；pass 表示分类和证据均可接受，warning 表示分类正确但证据有风险，fail 表示分类或处理状态未通过。",
+                "requires_human_review": "是否需要人工复核；分类错误、证据弱或质量风险存在时为 true。",
+                "result_quality_risk_reasons": "单条结果需要复核的原因，用于区分分类错误、证据不足和处理状态问题。",
             }
         )
+    else:
+        quality_gate_summary = {
+            "pass_count": MISSING_VALUE_TEXT,
+            "warning_count": MISSING_VALUE_TEXT,
+            "fail_count": MISSING_VALUE_TEXT,
+            "requires_human_review_count": MISSING_VALUE_TEXT,
+        }
 
     return {
         "schema_version": "v3",
@@ -345,8 +358,57 @@ def evaluate_topic_metrics(annotation_rows: list[dict[str, str]]) -> dict[str, A
         "missing_label_file_ids": missing_label_file_ids,
         "missing_prediction_file_ids": missing_prediction_file_ids,
         "invalid_prediction_file_ids": invalid_prediction_file_ids,
+        "quality_gate_summary": quality_gate_summary,
         "details": evaluated_details,
         "field_notes": field_notes,
+    }
+
+
+def _assess_video_result_quality(detail: dict[str, Any]) -> dict[str, Any]:
+    """给单条视频结果增加最小质量门禁判断。"""
+
+    reasons: list[str] = []
+    status = str(detail.get("processing_status") or "").strip()
+    if status and status not in {"success", "partial_success"}:
+        reasons.append(f"处理状态为 {status}，不是完整成功。")
+    elif status == "partial_success":
+        reasons.append("处理状态为 partial_success，结果可读但证据链不完整。")
+    if not detail.get("is_correct"):
+        reasons.append("主分类与人工答案不一致。")
+    if detail.get("secondary_topics_correct") is False:
+        reasons.append("副分类与人工答案不一致。")
+    if str(detail.get("video_evidence_stability") or "").strip() == "weak":
+        reasons.append("视频证据稳定性为 weak。")
+    quality_flags = str(detail.get("quality_flags") or "").strip()
+    if quality_flags:
+        reasons.append(f"存在质量风险标签：{quality_flags}。")
+    risk_reasons = str(detail.get("video_evidence_risk_reasons") or "").strip()
+    if risk_reasons:
+        reasons.append(f"视频证据风险原因：{risk_reasons}。")
+
+    if not reasons:
+        gate_status = "pass"
+    elif detail.get("is_correct") and detail.get("secondary_topics_correct") is not False and status in {"", "success", "partial_success"}:
+        gate_status = "warning"
+    else:
+        gate_status = "fail"
+
+    return {
+        "result_quality_gate_status": gate_status,
+        "requires_human_review": bool(reasons),
+        "result_quality_risk_reasons": reasons,
+    }
+
+
+def _summarize_quality_gate(details: list[dict[str, Any]]) -> dict[str, Any]:
+    """汇总视频质量门禁状态。"""
+
+    statuses = [str(item.get("result_quality_gate_status") or "") for item in details]
+    return {
+        "pass_count": statuses.count("pass"),
+        "warning_count": statuses.count("warning"),
+        "fail_count": statuses.count("fail"),
+        "requires_human_review_count": sum(1 for item in details if item.get("requires_human_review")),
     }
 
 
@@ -438,10 +500,10 @@ def render_evaluation_markdown(report: dict[str, Any], *, media_type: str | None
         f"| 缺少标签样本数 | {report['missing_label_count']} | 尚未填写 gold_topic 的样本数 |",
         f"| 有效预测数 | {report['valid_prediction_count']} | 成功产出允许分类范围内 predicted_topic 的样本数 |",
         f"| 缺少预测数 | {report['missing_prediction_count']} | 调用或解析失败导致没有 predicted_topic 的样本数 |",
-        f"| 非法预测数 | {report['invalid_prediction_count']} | predicted_topic 不属于九类允许值的样本数 |",
+        f"| 非法预测数 | {report['invalid_prediction_count']} | predicted_topic 不属于{VALID_TOPIC_LABEL}允许值的样本数 |",
         f"| 预测正确数 | {report['correct_count']} | predicted_topic 与 gold_topic 相同的样本数 |",
         f"| 端到端 Accuracy | {_format_metric(report['accuracy'])} | 以全部已标注样本为分母，无有效预测按未命中计算 |",
-        f"| 有效预测 Accuracy | {_format_metric(report['valid_prediction_accuracy'])} | 仅衡量成功产出九类预测的样本 |",
+        f"| 有效预测 Accuracy | {_format_metric(report['valid_prediction_accuracy'])} | 仅衡量成功产出{VALID_TOPIC_LABEL}预测的样本 |",
         f"| 预测覆盖率 | {_format_metric(report['prediction_coverage'])} | 有效预测数占已标注样本数的比例 |",
         f"| 副分类 Accuracy | {_format_metric(report['secondary_topics_accuracy'])} | predicted_secondary_topics 与 gold_secondary_topics 完全一致的比例 |",
         f"| Macro-F1 | {_format_metric(report['macro_f1'])} | 业务标签中本批次实际出现分类 F1 的简单平均 |",
@@ -461,17 +523,36 @@ def render_evaluation_markdown(report: dict[str, Any], *, media_type: str | None
     else:
         lines.append("| 当前数据未提供 | 0 | 当前数据未提供 | 当前数据未提供 | 当前数据未提供 |")
 
-    lines.extend(["", "## 明细", ""])
     if report_media_type == "video":
+        summary = report.get("quality_gate_summary", {})
         lines.extend(
             [
-                "| file_id | file_name | predicted_topic | gold_topic | 证据稳定性 | 质量风险 | 是否正确 | 备注 |",
-                "|---|---|---|---|---|---|---|---|",
+                "",
+                "## 视频质量门禁汇总",
+                "",
+                "| 指标 | 数值 | 含义 |",
+                "|---|---:|---|",
+                f"| 通过数 | {summary.get('pass_count', MISSING_VALUE_TEXT)} | 分类正确且没有证据风险的样本数 |",
+                f"| 警告数 | {summary.get('warning_count', MISSING_VALUE_TEXT)} | 分类正确但证据或质量标签存在风险的样本数 |",
+                f"| 失败数 | {summary.get('fail_count', MISSING_VALUE_TEXT)} | 主分类、副分类或处理状态未通过的样本数 |",
+                f"| 需人工复核数 | {summary.get('requires_human_review_count', MISSING_VALUE_TEXT)} | 需要负责人复核证据或分类的样本数 |",
+                "",
+                "## 明细",
+                "",
+            ]
+        )
+        lines.extend(
+            [
+                "| file_id | file_name | predicted_topic | gold_topic | 证据稳定性 | 质量风险 | 门禁 | 需复核 | 风险原因 | 是否正确 | 备注 |",
+                "|---|---|---|---|---|---|---|---|---|---|---|",
             ]
         )
     else:
         lines.extend(
             [
+                "",
+                "## 明细",
+                "",
                 "| file_id | file_name | predicted_topic | gold_topic | 是否正确 | 备注 |",
                 "|---|---|---|---|---|---|",
             ]
@@ -483,7 +564,10 @@ def render_evaluation_markdown(report: dict[str, Any], *, media_type: str | None
                 lines.append(
                     f"| {item['file_id']} | {item.get('file_name')} | {item['predicted_topic']} | "
                     f"{item['gold_topic']} | {item.get('video_evidence_stability') or MISSING_VALUE_TEXT} | "
-                    f"{item.get('quality_flags') or ''} | {'是' if item['is_correct'] else '否'} | "
+                    f"{item.get('quality_flags') or ''} | {item.get('result_quality_gate_status', MISSING_VALUE_TEXT)} | "
+                    f"{'是' if item.get('requires_human_review') else '否'} | "
+                    f"{_format_list(item.get('result_quality_risk_reasons'))} | "
+                    f"{'是' if item['is_correct'] else '否'} | "
                     f"{item.get('reviewer_note') or ''} |"
                 )
             else:

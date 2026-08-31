@@ -1,25 +1,84 @@
-project_name: multimodal_model_router
-input_dir: input
-output_dir: output
-use_mock_models: true
-ocr_backend: mock
-vision_understanding_backend: mock
-text_analysis_backend: mock
-deepseek_api_key_env: DEEPSEEK_API_KEY
-deepseek_base_url: https://api.deepseek.com
-deepseek_model_name: deepseek-v4-flash
-deepseek_max_tokens: 2500
-deepseek_compact_mode: true
-text_analysis_evidence_char_limit: 6000
-qwen_vl_api_key_env: DASHSCOPE_API_KEY
-qwen_vl_base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-qwen_vl_model_name: qwen-vl-plus
-qwen_vl_max_tokens: 500
-qwen_vl_max_image_side: 960
-speech_to_text_backend: mock
-dashscope_asr_api_key_env: DASHSCOPE_API_KEY
-dashscope_asr_submit_url: https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription
-dashscope_asr_model_name: paraformer-v2
-default_budget_limit_cny: 50
-target_output_format: jsonl
-allow_partial_success: true
+project:
+  name: multimodal_model_router
+
+paths:
+  input_dir: input
+  output_dir: output
+
+runtime:
+  use_mock_models: true
+  default_budget_limit_cny: 50
+  target_output_format: jsonl
+  allow_partial_success: true
+
+pipelines:
+  text:
+    text_analysis: mock
+  image:
+    ocr: paddleocr
+    vision_understanding: mock
+    text_analysis: mock
+  video:
+    keyframe_ocr: paddleocr
+    keyframe_vision_understanding: mock
+    speech_to_text: mock
+    text_analysis: mock
+  audio:
+    speech_to_text: mock
+    text_analysis: mock
+
+backends:
+  text_analysis:
+    mock:
+      provider: local
+      model_name: mock-text
+    deepseek:
+      provider: deepseek
+      api_key_env: DEEPSEEK_API_KEY
+      base_url: https://api.deepseek.com
+      model_name: deepseek-v4-flash
+      max_tokens: 1600
+      compact_mode: true
+      evidence_char_limit: 6000
+    qwen_text:
+      provider: qwen
+      api_key_env: DASHSCOPE_API_KEY
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      model_name: qwen-plus-2025-12-01
+      max_tokens: 1600
+  ocr:
+    mock:
+      provider: local
+      model_name: mock-ocr
+    paddleocr:
+      provider: paddlepaddle
+      runtime_type: local_model
+      model_name: PP-OCRv5_mobile
+    qwen_ocr:
+      provider: qwen
+      runtime_type: live_api
+      api_key_env: DASHSCOPE_API_KEY
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      model_name: qwen3.5-ocr
+      max_tokens: 4096
+      max_image_side:
+  vision_understanding:
+    mock:
+      provider: local
+      model_name: mock-vision
+    qwen_vl:
+      provider: qwen
+      api_key_env: DASHSCOPE_API_KEY
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      model_name: qwen-vl-plus
+      max_tokens: 500
+      max_image_side: 960
+  speech_to_text:
+    mock:
+      provider: local
+      model_name: mock-asr
+    dashscope_asr:
+      provider: dashscope
+      api_key_env: DASHSCOPE_API_KEY
+      submit_url: https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription
+      model_name: paraformer-v2

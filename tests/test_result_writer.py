@@ -58,11 +58,12 @@ class ResultWriterTest(unittest.TestCase):
                 ],
             )
             content = path.read_text(encoding="utf-8")
+            physical_lines = content.splitlines()
+            line_records = [json.loads(line) for line in physical_lines]
             records = read_jsonl(path)
 
-        self.assertIn('{\n  "file_id": "file_001"', content)
-        self.assertIn('\n  "tags": [', content)
-        self.assertIn('\n  "models_used": [', content)
+        self.assertEqual(len(physical_lines), 2)
+        self.assertEqual([record["file_id"] for record in line_records], ["file_001", "file_002"])
         self.assertEqual(len(records), 2)
         self.assertEqual(records[0]["file_id"], "file_001")
         self.assertEqual(records[0]["tags"], ["中文标签", "OCR"])

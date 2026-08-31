@@ -1,0 +1,88 @@
+schema_version: v1
+phase_name: phase2_real_chain_stabilization
+description: "二期真实链路稳定化基准；只用于离线判断，不触发模型 API。"
+
+text_backend_comparison:
+  file_ids:
+    - file_0005
+    - file_0006
+    - file_0007
+  candidates:
+    deepseek:
+      model_name: deepseek-v4-flash
+    qwen_text:
+      model_name: qwen-plus-2025-12-01
+  candidate_batches:
+    deepseek:
+      batch_dir: output/batch_text_compare_deepseek_round1_20260825
+    qwen_text:
+      batch_dir: output/batch_text_compare_qwen_round1_20260825
+  first_round_calls_per_candidate: 3
+  max_total_live_calls: 12
+  max_estimated_cost_cny: 0.10
+  max_text_analysis_p95_latency_ms: 8000
+  warning_selection_priority:
+    - quality
+    - latency
+    - estimated_cost
+  files:
+    - file_id: file_0005
+      expected_processing_status: success
+      expected_topic: other
+      expected_secondary_topics: []
+    - file_id: file_0006
+      expected_processing_status: success
+      expected_topic: humor
+      expected_secondary_topics:
+        - lifestyle
+    - file_id: file_0007
+      expected_processing_status: success
+      expected_topic: technology
+      expected_secondary_topics: []
+
+baseline:
+  batch_dir: output/batch_video_compact_3files_output_tightened_retry_20260820
+  preflight_report: output/preflight_video_compact_3files_output_tightened_retry_20260820/routing_preflight_report.json
+  files:
+    - file_id: file_0005
+      expected_processing_status: success
+      expected_topic: other
+      expected_secondary_topics: []
+    - file_id: file_0006
+      expected_processing_status: success
+      expected_topic: humor
+      expected_secondary_topics:
+        - lifestyle
+    - file_id: file_0007
+      expected_processing_status: success
+      expected_topic: technology
+      expected_secondary_topics: []
+
+criteria:
+  min_total_files: 3
+  max_failed_files: 0
+  min_success_rate: 1.0
+  max_total_errors: 0
+  max_budget_used_rate: 0.01
+  require_no_mock_calls: true
+  required_task_types:
+    - text_analysis
+  preflight:
+    expected_policy_name: production_sla
+    acceptable_statuses:
+      - pass
+      - warning
+    min_real_coverage_rate: 1.0
+    max_mock_coverage_rate: 0.0
+    max_task_p95_latency_ms:
+      ocr: 30000
+      visual_understanding: 10000
+      speech_to_text: 10000
+      text_analysis: 8000
+
+field_notes:
+  batch_dir: "二期基准批次目录，用于读取 results.jsonl、model_calls.jsonl 和 batch_report.json。"
+  preflight_report: "生产候选 SLA 预检查报告路径，用于读取 preflight_status、真实覆盖率和任务级 P95 延迟。"
+  expected_topic: "人工确认的主分类，用于检查二期基准样本是否出现分类回退。"
+  max_task_p95_latency_ms: "按任务类型设置的 P95 延迟上限，用于判断 OCR、视觉理解、语音识别和文本分析是否分别达标。"
+  warning_selection_priority: "没有候选全部达标时的确定性推荐顺序；当前优先保证分类质量，再比较延迟和估算成本。"

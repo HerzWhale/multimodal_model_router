@@ -1,0 +1,72 @@
+phase:
+  id: phase_4_3
+  name: qwen35_ocr_api_integration_and_evidence_comparison
+
+planning:
+  version: phase_4_3_v1
+  decision: NEXT_PHASE
+
+user_checkpoint:
+  completed: true
+  decisions:
+    default_and_fallback: A
+    media_scope: A
+    definition_of_done: C
+
+execution_window:
+  id: phase_4_3_window_1
+  round: 2
+  max_rounds: 3
+
+gate:
+  core_function: true
+  tests: true
+  validation: false
+  performance: false
+  cost: true
+  documentation: true
+  risk: true
+
+progress:
+  material_progress_required: true
+
+result:
+  phase_status: WARNING
+  window_status: COMPLETED
+  must_return_to_planning: true
+
+scope:
+  new_default_ocr_backend: paddleocr
+  evaluated_candidate_ocr_backend: qwen_ocr
+  request_model: qwen3.5-ocr
+  preserved_local_backend: paddleocr
+  media_paths:
+    - image
+    - video_keyframes
+  controlled_image_samples:
+    - img_1.png
+    - img_7.jpg
+    - img_9.jpg
+  controlled_video_count: 1
+  max_qwen_ocr_live_calls: 6
+  other_live_api_calls_allowed: 0
+
+success_evidence:
+  offline_tests: 375_passed
+  image_live_batch: output/batch_qwen35_ocr_3images_trial
+  image_quality_report: not_passed
+  video_live_batch: pending_user_authorization
+  call_record_check: passed
+
+risk_boundaries:
+  live_api_authorization: "settings中的默认后端不能替代--allow-live-api授权。"
+  cost_truth: "按公开价格和返回token计算的金额仍是估算，未对账前不等于实际扣费。"
+  batch_boundary: "Qwen3.5-OCR官方当前不支持Batch推理；项目只能逐图片或关键帧调用。"
+  fallback_rule: "若接口、质量或延迟验收失败，保留实现为已评估候选并恢复PaddleOCR默认。"
+
+field_notes:
+  new_default_ocr_backend: "计划设为默认的OCR后端；真实API仍需单独授权。"
+  preserved_local_backend: "继续保留的本地OCR基线，用于离线、隐私或云API失败场景。"
+  max_qwen_ocr_live_calls: "本Execution Window允许的Qwen3.5-OCR真实调用上限，用于控制成本和范围。"
+  phase_status: "当前Phase状态；IN_PROGRESS表示规划完成但业务代码和真实验证尚未完成。"
+  window_status: "当前Execution Window状态；READY表示可以进入Execution Round A。"

@@ -45,6 +45,7 @@ runtime_backends:
   ocr:
     - mock
     - paddleocr
+    - qwen_ocr
   vision_understanding:
     - mock
     - qwen_vl
@@ -54,6 +55,14 @@ runtime_backends:
   text_analysis:
     - mock
     - deepseek
+
+text_analysis_execution:
+  deferred_processing_status: pending
+  deferred_quality_flag: text_analysis_deferred
+  deferred_warning: "上游证据已写出，文本分析已延后到第二阶段执行。"
+  no_evidence_processing_status: failed
+  no_evidence_quality_flag: no_usable_evidence
+  no_evidence_error: "上游处理未产生可用证据，无法进入延迟文本分析。"
 
 video_preprocessing:
   default_max_keyframes: 3
@@ -73,6 +82,8 @@ ocr_quality_gate:
   min_short_line_ratio: 0.7
   min_single_char_line_ratio: 0.25
   min_ascii_noise_line_ratio: 0.4
+  min_ascii_fragment_lines: 30
+  min_ascii_fragment_ratio: 0.6
 
 topics:
   values:
@@ -201,6 +212,12 @@ deepseek_prompt:
     - 仅仅出现商品、食品、设备或服务名称，不足以证明内容适合商业推广。
     - 如果证据没有明确业务背景，使用“可用于内容归档、检索和人工复核”这类保守用途。
 
+    输出长度规则：
+    - 只输出一个 JSON 对象，不输出 Markdown、解释过程、证据逐段复述或额外字段。
+    - summary 控制在 120 字以内，只保留足以支撑分类判断的核心信息。
+    - business_use 控制在 40 字以内，只写一个可执行或保守的业务动作短句。
+    - tags 最多五个，每个尽量控制在 8 个字以内。
+
     请输出以下 json 字段：
     {
       "topic": "主分类，只能一个",
@@ -210,4 +227,4 @@ deepseek_prompt:
       "business_use": "这份结构化结果可以支持的业务用途"
     }
   compact_retry_suffix: |
-    失败重试要求：只输出最短合法 JSON；summary 控制在 80 字以内；business_use 控制在 40 字以内。
+    紧凑输出要求：只输出最短合法 JSON；summary 控制在 80 字以内；business_use 控制在 30 字以内；不要复述证据细节。

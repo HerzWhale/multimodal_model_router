@@ -21,12 +21,16 @@ sys.path.insert(0, str(SRC_DIR))
 
 from model_clients import (
     DEFAULT_DEEPSEEK_MAX_TOKENS,
+    DEFAULT_QWEN_OCR_MODEL_NAME,
     DEFAULT_QWEN_VL_MAX_IMAGE_SIDE,
     DEFAULT_QWEN_VL_MAX_TOKENS,
+    DEFAULT_QWEN_TEXT_MODEL_NAME,
     DeepSeekAttemptsExhausted,
     PaddleOCRResponseError,
     QwenVLAttemptsExhausted,
     QwenVLResponseError,
+    QwenTextAttemptsExhausted,
+    QwenOCRResponseError,
     TOPIC_VALUES,
     _create_paddleocr_engine,
     _build_deepseek_messages,
@@ -40,6 +44,8 @@ from model_clients import (
     mock_vision_client,
     paddleocr_client,
     qwen_vl_image_understanding_client,
+    qwen_ocr_client,
+    qwen_text_analysis_client,
 )
 
 
@@ -121,7 +127,55 @@ def _qwen_vl_api_response(content: str) -> _FakeResponse:
     return _FakeResponse(json.dumps(body, ensure_ascii=False).encode("utf-8"))
 
 
+def _qwen_ocr_api_response(content: object) -> _FakeResponse:
+    body = {
+        "model": DEFAULT_QWEN_OCR_MODEL_NAME,
+        "choices": [{"message": {"content": content}}],
+        "usage": {"prompt_tokens": 240, "completion_tokens": 24, "total_tokens": 264},
+    }
+    return _FakeResponse(json.dumps(body, ensure_ascii=False).encode("utf-8"))
+
+
 class ModelClientsTest(unittest.TestCase):
+    def test_qwen_ocr_client_requires_api_key(self) -> None:
+        with self.assertRaisesRegex(ValueError, "DASHSCOPE_API_KEY"):
+            qwen_ocr_client("missing.png", api_key=None)
+
+    @patch("model_clients.request.urlopen")
+    def test_qwen_ocr_client_sends_original_image_and_records_usage(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _qwen_ocr_api_response("第一行\n第二行")
+        original = b"original-image-bytes"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "demo.png"
+            image_path.write_bytes(original)
+            result = qwen_ocr_client(image_path, api_key="test-key")
+
+        payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
+        data_url = payload["messages"][0]["content"][0]["image_url"]["url"]
+        self.assertEqual(payload["model"], DEFAULT_QWEN_OCR_MODEL_NAME)
+        self.assertEqual(base64.b64decode(data_url.split(",", 1)[1]), original)
+        self.assertEqual(result["ocr_text"], "第一行\n第二行")
+        self.assertEqual(result["_api_usage"]["total_tokens"], 264)
+        self.assertEqual(result["_response_model_name"], DEFAULT_QWEN_OCR_MODEL_NAME)
+
+    @patch("model_clients.request.urlopen")
+    def test_qwen_ocr_client_rejects_invalid_outer_json(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _FakeResponse(b"not-json")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "demo.png"
+            image_path.write_bytes(b"image")
+            with self.assertRaisesRegex(QwenOCRResponseError, "qwen_ocr_response_invalid_json"):
+                qwen_ocr_client(image_path, api_key="test-key")
+
+    @patch("model_clients.request.urlopen")
+    def test_qwen_ocr_client_rejects_empty_content(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _qwen_ocr_api_response("")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            image_path = Path(tmp_dir) / "demo.png"
+            image_path.write_bytes(b"image")
+            with self.assertRaisesRegex(QwenOCRResponseError, "qwen_ocr_content_empty"):
+                qwen_ocr_client(image_path, api_key="test-key")
+
     def test_mock_ocr_client(self) -> None:
         result = mock_ocr_client("demo.png")
 
@@ -505,15 +559,46 @@ class ModelClientsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key=None)
 
+    def test_qwen_text_analysis_client_requires_api_key(self) -> None:
+        with self.assertRaisesRegex(ValueError, "DASHSCOPE_API_KEY"):
+            qwen_text_analysis_client({"raw_text": "AI 内容分析"}, api_key=None)
+
+    @patch("model_clients.request.urlopen")
+    def test_qwen_text_client_uses_fixed_model_and_records_response(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _api_response(
+            _analysis_content(),
+            model=DEFAULT_QWEN_TEXT_MODEL_NAME,
+        )
+
+        result = qwen_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key")
+
+        payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(payload["model"], DEFAULT_QWEN_TEXT_MODEL_NAME)
+        self.assertFalse(payload["enable_thinking"])
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+        self.assertEqual(payload["max_completion_tokens"], 1600)
+        self.assertEqual(result["_api_usage"]["total_tokens"], 150)
+        self.assertEqual(result["_api_attempts"][0]["response_model_name"], DEFAULT_QWEN_TEXT_MODEL_NAME)
+
+    @patch("model_clients.request.urlopen")
+    def test_qwen_text_client_rejects_invalid_json(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = _api_response("不是 JSON")
+
+        with self.assertRaises(QwenTextAttemptsExhausted) as context:
+            qwen_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key")
+
+        self.assertIn("qwen_text_content_invalid_json", str(context.exception))
+
     @patch("model_clients.request.urlopen")
     def test_deepseek_client_parses_valid_json_and_tracks_attempt(self, mock_urlopen) -> None:
-        mock_urlopen.return_value = _api_response(_analysis_content())
+        mock_urlopen.return_value = _api_response(_analysis_content(), model="deepseek-v4-flash")
 
         result = deepseek_text_analysis_client({"raw_text": "AI 内容分析"}, api_key="test-key")
 
         self.assertEqual(result["topic"], "technology")
         self.assertEqual(result["_api_usage"]["total_tokens"], 150)
         self.assertEqual([item["status"] for item in result["_api_attempts"]], ["success"])
+        self.assertEqual(result["_api_attempts"][0]["response_model_name"], "deepseek-v4-flash")
         sent_payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
         self.assertEqual(sent_payload["max_tokens"], DEFAULT_DEEPSEEK_MAX_TOKENS)
 
@@ -537,7 +622,7 @@ class ModelClientsTest(unittest.TestCase):
         )
 
         sent_payload = json.loads(mock_urlopen.call_args.args[0].data.decode("utf-8"))
-        self.assertIn("失败重试要求", sent_payload["messages"][0]["content"])
+        self.assertIn("紧凑输出要求", sent_payload["messages"][0]["content"])
         self.assertIn("……", sent_payload["messages"][1]["content"])
 
     def test_deepseek_client_rejects_invalid_max_tokens_before_request(self) -> None:
@@ -640,8 +725,8 @@ class ModelClientsTest(unittest.TestCase):
         second_payload = json.loads(mock_urlopen.call_args_list[1].args[0].data.decode("utf-8"))
         self.assertEqual(result["topic"], "technology")
         self.assertEqual([item["status"] for item in result["_api_attempts"]], ["failed", "success"])
-        self.assertNotIn("失败重试要求", first_payload["messages"][0]["content"])
-        self.assertIn("失败重试要求", second_payload["messages"][0]["content"])
+        self.assertNotIn("紧凑输出要求", first_payload["messages"][0]["content"])
+        self.assertIn("紧凑输出要求", second_payload["messages"][0]["content"])
         self.assertIn("……", second_payload["messages"][1]["content"])
 
     @patch("model_clients.request.urlopen")
@@ -791,6 +876,28 @@ class ModelClientsTest(unittest.TestCase):
         self.assertIn("不得编造用户增长、收入提升、转化效果或算法效果", system_prompt)
         self.assertIn("只有证据明确出现品牌合作、广告合作、购买入口、下单、促销或带货时", system_prompt)
         self.assertIn("可用于内容归档、检索和人工复核", system_prompt)
+
+    def test_deepseek_prompt_limits_normal_output_length(self) -> None:
+        """检查正常调用也有短输出约束，避免文本分析结果过长。"""
+
+        messages = _build_deepseek_messages({"raw_text": "用于检查输出长度规则。"})
+        system_prompt = messages[0]["content"]
+
+        self.assertIn("只输出一个 JSON 对象", system_prompt)
+        self.assertIn("summary 控制在 120 字以内", system_prompt)
+        self.assertIn("business_use 控制在 40 字以内", system_prompt)
+        self.assertIn("不输出 Markdown、解释过程、证据逐段复述或额外字段", system_prompt)
+
+    def test_deepseek_compact_prompt_uses_stricter_output_length(self) -> None:
+        """检查紧凑模式进一步收紧输出，供视频批次降延迟使用。"""
+
+        messages = _build_deepseek_messages({"raw_text": "用于检查紧凑输出规则。"}, compact=True)
+        system_prompt = messages[0]["content"]
+
+        self.assertIn("紧凑输出要求", system_prompt)
+        self.assertIn("summary 控制在 80 字以内", system_prompt)
+        self.assertIn("business_use 控制在 30 字以内", system_prompt)
+        self.assertIn("不要复述证据细节", system_prompt)
 
     @patch("model_clients.request.urlopen")
     def test_deepseek_client_replaces_unsupported_commercial_use(self, mock_urlopen) -> None:

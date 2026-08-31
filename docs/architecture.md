@@ -9,7 +9,7 @@
 ```text
 config/
   ├─ settings.yaml                 运行配置
-  ├─ routing_rules.yaml            任务到供应商 / 模型的固定路由配置
+  ├─ routing_rules.yaml            历史固定路由兼容配置，新执行路径不再依赖
   ├─ model_prices.yaml             模型计价配置，包含价格来源、更新时间和可信度
   └─ routing_policy_config.yaml    离线路由策略约束配置
 
@@ -55,10 +55,10 @@ output/
 
 | 配置文件 | 含义 | 作用 |
 |---|---|---|
-| `config/settings.yaml` | 运行环境配置 | 管理输入输出目录、默认后端、API地址、模型名、token上限和预算 |
+| `config/settings.yaml` | 运行环境配置 | `pipelines` 管各媒体处理链路，`backends` 管具体供应商、模型与调用参数 |
 | `config/runtime_policy.yaml` | 运行策略配置 | 管理文件类型白名单、后端白名单、视频预处理参数、OCR质量闸门、topic体系和DeepSeek提示词 |
 | `config/model_prices.yaml` | 模型价格配置 | 管理模型计价单位、价格来源、更新时间和价格可信度 |
-| `config/routing_rules.yaml` | 固定路由配置 | 管理不同任务类型默认选择哪个供应商和模型 |
+| `config/routing_rules.yaml` | 历史固定路由兼容配置 | 只服务旧入口和历史测试；双层 settings 与可执行路由计划路径不再把它作为运行时事实来源 |
 
 字段说明：
 
@@ -67,9 +67,12 @@ output/
 | `input_dir` | 本次批处理读取的输入目录，用来区分普通业务输入和受控评估样本 |
 | `batch_id` | 一次批处理任务的唯一标识，用于把本次输入文件、模型调用和输出结果归到同一批次 |
 | `gold_topic` | 人工标注的正确主分类，只存在于评估流程中，用来计算文本主分类准确率 |
-| `ocr_backend` | 图片或视频关键帧 OCR 后端配置，用来决定使用 mock 还是本地 PaddleOCR |
-| `vision_understanding_backend` | 图片或视频关键帧视觉理解后端配置，用来决定使用 mock 还是 Qwen-VL API |
-| `text_analysis_backend` | 文本分析后端配置，用来决定使用本地 mock 还是 DeepSeek 真实 API |
+| `pipelines` | 分析主体配置；按文本、图片、视频、音频定义实际处理链路，同一批次可按媒体类型选择不同后端 |
+| `backends` | 模型主体配置；集中维护 OCR、视觉理解、ASR、文本分析后端的供应商、模型和接口参数 |
+| `selected_pipelines` | 批次实际使用的媒体链路快照；用于复核每类输入最终选择了哪些任务后端 |
+| `selected_backends` | 兼容旧报告的批次级后端摘要；媒体类型选择不一致时写为 `mixed_by_media` |
+| `route_plan` | 预检查生成并由流水线消费的路由计划快照；用于核对计划和实际模型调用是否一致 |
+| `preflight_status` | 路由计划的约束检查状态；`fail` 阻止执行，`warning` 仅允许显式受控执行 |
 | `--allow-live-api` | 真实 API 调用授权开关；没有该开关时，即使配置选择 DeepSeek 或 Qwen-VL，也会在网络请求前停止 |
 | `--max-api-retries` | 可重试错误的最大重试次数；默认0，只允许显式设为1，避免意外增加费用 |
 | `--include-files` | 指定本次只处理哪些文件名，用于受控评估少量图片，避免误跑整个输入目录 |
@@ -83,7 +86,9 @@ PaddleOCR 在本地运行，不使用外部 API 授权开关。选择 PaddleOCR 
   ↓
 file_loader 生成文件清单
   ↓
-pipeline_runner 根据媒体类型选择流水线
+routing_preflight 从 settings 生成可审查 route_plan（可选）
+  ↓
+pipeline_runner 根据媒体类型消费 route_plan 或既有显式配置
   ↓
 preprocessor 准备文本、图片路径、视频元信息和最多 5 张等距关键帧
   ↓
@@ -100,6 +105,8 @@ model_strategy_advisor / strategy_simulator 做离线策略分析
 text_topic_evaluator 基于人工标准答案做文本主分类评估
 ```
 
+Phase 4.2 在预检查之前增加一条受控的离线决策输入链：`phase2_gate` 读取已有 DeepSeek / Qwen 文本对照证据，严格候选仍只收录全部门槛通过者；没有严格候选时，按质量、延迟、估算成本依次排序并生成带缺口的 warning 推荐。`main.py --route-decision-report` 只把推荐后端、推荐状态、未满足约束、未比较任务和候选摘要写入路由计划，不复制完整评估报告。该决策只覆盖文本分析；OCR、视觉理解和语音识别沿用 `settings.yaml` 或显式参数。warning 推荐仍需显式传入路由计划，真实模型仍需独立的 `--allow-live-api` 授权。
+
 ## 2. 核心模块说明
 
 | 模块 | 作用 | 当前边界 |
@@ -107,9 +114,9 @@ text_topic_evaluator 基于人工标准答案做文本主分类评估
 | `main.py` | 读取配置、检查 PaddleOCR 本地依赖、执行 DeepSeek 和 Qwen-VL API 安全校验并运行批处理 | 默认使用 mock；PaddleOCR 必须显式选择，DeepSeek 和 Qwen-VL 还必须显式授权 |
 | `file_loader.py` | 扫描输入目录，生成文件级元数据 | 支持本地文件，不支持云存储 |
 | `preprocessor.py` | 根据文件类型做基础预处理 | 视频 V1 已能读取元信息并等距抽取最多 5 张关键帧；本机存在 ffmpeg 时可抽取单声道 16kHz wav 音频文件；缺少依赖或提取失败时记录明确状态 |
-| `model_router.py` | 根据任务类型选择供应商和模型 | 当前是固定路由，不是运行时动态推荐 |
+| `model_router.py` | 从双层 settings 构造、校验和消费可执行路由计划，并为调用记录解析供应商和模型 | 支持显式计划，不根据实时观测自动换模型；旧固定规则读取仅保留兼容 |
 | `model_clients.py` | 封装 mock、本地 PaddleOCR、Qwen-VL 图片/关键帧理解和 DeepSeek 文本分析 | Qwen-VL 入口已完成离线测试、`img_1.png` 单图真实 API 验证和可重试错误最多1次重试；发送给 Qwen-VL 的图片请求副本可按最长边配置压缩，原始文件不被修改；视频关键帧质量仍需后续受控复测 |
-| `pipeline_runner.py` | 调度文件流程，记录真实或 mock 调用、证据、成本、延迟、错误和质量风险 | PaddleOCR 和 Qwen-VL 可用于图片和视频 V1 抽出的多张关键帧；Qwen-VL 会把每次尝试分别记入模型调用；默认仍为 mock；真实OCR会经过低质量文本闸门 |
+| `pipeline_runner.py` | 调度文件流程，在任务选择层消费媒体路由计划，并记录真实或 mock 调用、证据、成本、延迟、错误和质量风险 | 路由计划贯穿到任务选择层，但不进入模型客户端；默认仍为 mock，真实 API 仍需要独立授权 |
 | `cost_latency_tracker.py` | 生成模型调用成本、价格目录元数据和延迟记录 | 成本依赖本地价格配置；模型调用记录会带出价格来源、更新时间和可信度 |
 | `price_catalog_updater.py` | 从官方公开价格页抓取 Qwen-VL 和 DeepSeek 人民币价格，并生成刷新报告；带 `--apply` 时写回本地价格目录 | 不登录控制台，不读取真实账单，不调用付费模型API；写回前会检查必要计价单位、正数价格和大幅价格变化，官方页面结构变化或网络失败时会失败并输出错误 |
 | `cost_repricing.py` | 读取历史 `model_calls.jsonl` 和当前 `model_prices.yaml`，重新计算历史批次在当前价格目录下的成本 | 不改写历史调用记录，不重跑模型；用于解释价格目录更新后历史成本口径变化 |
@@ -118,7 +125,7 @@ text_topic_evaluator 基于人工标准答案做文本主分类评估
 | `model_strategy_advisor.py` | 基于既有批次生成模型组合策略报告，可选择使用历史成本或当前价格目录重算成本 | 离线分析，不触发外部 API；传入成本重算报告时使用 `current_repriced` 口径 |
 | `model_catalog.py` | 从调用明细聚合模型目录 | 只基于已有调用记录，不编造未知模型数据 |
 | `routing_policy.py` | 定义成本、延迟、质量、平衡和生产候选 SLA 策略 | 离线策略判断，不改变运行时模型调用；当前 `production_sla` 只检查任务级 P95 延迟和真实模型覆盖率，不包含可用性、吞吐、错误预算或告警 |
-| `routing_preflight.py` | 在批处理前读取当前路由、价格目录、策略约束、可选输入目录和已有模型调用记录，生成运行前风险检查、规模画像、历史延迟画像、任务级延迟目标检查、价格目录画像、延迟阻塞归因和受控小样本试跑建议；推荐通过 `main.py --preflight-only` 调用 | 不调用模型，不自动换模型，不联网刷新价格；预算可基于输入规模估算，P95延迟可基于已有 `model_calls.jsonl` 判断；当配置 `task_latency_targets_ms` 时优先按 OCR、视觉理解、文本分析等任务分别检查，避免用同一个全局目标误杀不同耗时结构的任务；延迟阻塞归因会区分真实外部 API、本地运行和 mock 占位；价格目录画像只判断本地价格是否过期或可信度不足；试跑建议只生成命令参考，不会自动执行 |
+| `routing_preflight.py` | 在批处理前读取双层 settings、价格目录、策略约束、可选输入和历史调用，生成风险报告与 `route_plan.json`；推荐通过 `main.py --preflight-only` 调用 | 不调用模型、不自动执行计划、不联网刷新价格；跨媒体同一任务选择不同后端时，当前任务级成本/延迟摘要只展示代表路线并降级为 warning，精确媒体路线仍保留在计划中 |
 | `cost_reconciliation.py` | 根据 `model_calls.jsonl` 生成多供应商手工账单模板，并把估算成本与供应商实际扣费对比 | 不接平台账单 API，不访问网络；首版只支持人工填入统一格式账单金额，并拒绝非法金额和重复账单记录 |
 | `strategy_simulator.py` | 基于既有批次生成路由策略模拟报告 | 不触发外部 API，不重新跑批处理 |
 | `text_topic_evaluator.py` | 生成文本评估模板并计算 Accuracy、Macro-F1 和分类级指标 | 只评估文本主分类，不评估图片、视频、摘要或标签质量 |
@@ -140,6 +147,10 @@ DeepSeek 文本分析
   ↓
 topic / secondary_topics / tags / summary / business_use
 ```
+
+文本分析还支持最小两阶段执行。开启 `--defer-text-analysis` 时，主流程只保存原文或上游证据，写出 `processing_status=pending`，不调用文本模型。后续由现有 `reanalyze_batch_text.py` 生成最终结果，并用 `source_batch_id` 关联源批次。
+
+该设计只解决慢文本模型阻塞上游证据落盘的问题。它不包含消息队列、后台 Worker、自动调度或数据库任务锁。
 
 ### 图片流程
 
@@ -438,8 +449,8 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 | `evaluated_count` | 已纳入评估的文本样本数，用来判断 Accuracy 的样本基础 |
 | `correct_count` | 模型预测与人工标准答案一致的样本数，用来计算 Accuracy |
 | `accuracy` | 文本主分类准确率，计算方式为 `correct_count / evaluated_count` |
-| `valid_prediction_accuracy` | 有效九分类预测中的准确率，用来单独观察分类判断能力 |
-| `prediction_coverage` | 有效九分类预测占已评估样本的比例，用来观察调用和结构解析稳定性 |
+| `valid_prediction_accuracy` | 有效分类预测中的准确率，用来单独观察分类判断能力 |
+| `prediction_coverage` | 有效分类预测占已评估样本的比例，用来观察调用和结构解析稳定性 |
 | `missing_prediction_count` | 没有产出主分类结果的样本数，用来统计调用或解析失败 |
 | `macro_f1` | 各参与评估分类 F1 的简单平均，使不同样本量的分类具有相同权重 |
 | `precision` | 预测为某分类的样本中真正属于该分类的比例，用于观察误报 |
@@ -453,6 +464,10 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 | `matched_ocr_text` | 与人工文字块配对的完整OCR行，用于追溯指标来源 |
 
 ## 8. 当前架构限制
+
+### 文本后端候选验证边界
+
+文本重分析入口支持 DeepSeek 与固定版本 `qwen-plus-2025-12-01` 共用同一份历史证据、分类规则和输出结构。第一轮三文件对照中，DeepSeek质量通过但延迟失败，Qwen延迟通过但副分类质量失败；因此Qwen仍不加入主批处理运行时，也不进行自动动态路由。调用记录保存请求模型和供应商返回模型，便于确认实际服务版本。
 
 - 真实模型证据覆盖 DeepSeek 文本分析和 PaddleOCR 图片文字提取；PaddleOCR已完成五张正式图片、共151段人工业务文字评估，但样本量仍不足以外推生产质量。
 - 图片 OCR 默认仍为 mock，显式选择后才使用本地 PaddleOCR；图片视觉理解默认仍为 mock，已支持显式选择 Qwen-VL API，并已完成 `img_1.png` 单图真实验证；视频 V1 抽出的多张关键帧已经能接入 PaddleOCR 或 Qwen-VL，且 Qwen-VL 关键帧级重试已完成离线测试；语音识别默认仍为 mock，但可显式选择 DashScope ASR。
@@ -469,7 +484,7 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 - 多供应商成本对账已经具备通用模板、账单金额校验和报告生成能力，但当前只支持手工录入账单金额，不会自动拉取阿里、DeepSeek、豆包等平台账单；未填入 `billed_cost_cny` 前，`cost_confidence` 仍为 `unverified`。如果 `billed_cost_cny` 是非数字、负数、NaN 或 Infinity，或者同一供应商/模型/响应模型存在重叠时间窗口的重复账单记录，系统会拒绝生成对账报告。
 - 决策层报告和路由策略模拟基于已有批次数据生成，不能替代真实多供应商 live test。
 - 历史14条受控结果存在标签泄漏，只能证明工程链路；清理后的18条样本修改前基线为77.78% Accuracy和73.70% Macro-F1。
-- 九类规则回归批次端到端Accuracy为94.44%、有效预测Accuracy为100.00%、预测覆盖率为94.44%、Macro-F1为96.30%；原4条错例均已修复，但历史批次有1条响应解析失败。
+- 历史 9 类规则回归批次端到端Accuracy为94.44%、有效预测Accuracy为100.00%、预测覆盖率为94.44%、Macro-F1为96.30%；原4条错例均已修复，但历史批次有1条响应解析失败。当前项目已扩展为 11 类体系，视频质量评价需以新体系和人工视频答案为准。
 - 结构化响应校验已通过原失败样本的真实定向验证；显式重试分支已通过离线故障测试，但本次真实调用未自然触发重试。
 - 高风险商业用途证据约束已完成原样本的真实定向验证，本次没有再生成无证据商业建议；模型主动返回保守用途，所以强制降级分支仍只有离线测试证据。
 - 当前18条样本每类只有2条，且参与过规则诊断，不能代表线上内容分布或证明泛化能力。
@@ -510,3 +525,8 @@ python .\src\main.py --input-dir evaluation\text_topic_small_set --text-analysis
 |---|---|
 | `docs/demo_walkthrough.md` | 解释代表性输出的运行方式、读法、成本延迟和真实 / mock 边界 |
 | `docs/tests.md` | 说明已有离线测试、测试命令、覆盖范围、风险缺口和后续测试计划 |
+## Phase 4.3 OCR 后端边界
+
+图片的 `ocr` 与视频的 `keyframe_ocr` 共享 `pipeline_runner.py` 中同一后端调用入口。`qwen_ocr` 使用现有 OpenAI 兼容 HTTP 路径和图片 Data URL，不新增 SDK；默认保留原图，配置的 `max_image_side` 只在明确填写时压缩请求副本。PaddleOCR 作为本地基线保留，不做自动故障切换。
+
+云 OCR 成功调用会保存请求模型、响应模型、输入/输出 token、估算成本和延迟。单帧失败会写入失败调用与错误记录，其他成功关键帧仍可合并为视频文字证据。价格来自本地目录，未与账单对账前不等于真实扣费。
